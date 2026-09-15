@@ -1,0 +1,10 @@
+# local event store
+.stratagema/
+*.db
+
+# build artifacts
+bin/
+*.exe
+
+# local-only config
+.claude/settings.local.json
