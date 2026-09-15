@@ -11,14 +11,45 @@ The steering mechanism this is built around is called **intent transfer** —
 the definition is still being worked out in the open, not a finished concept
 being described after the fact.
 
-## Status: early, work in progress
+## Status: early, both primitives implemented and dry-run tested
 
-- **Resource locks** — designed, not yet implemented. An agent acquires a
-  named lock before touching a shared resource; another agent asking for the
-  same lock is told no, not left to find out the hard way.
-- **Interest / event propagation** — implemented and dry-run tested. An
-  agent declares interest in a resource; when another agent updates it, an
-  event is created and can be pushed live over SSE to anyone subscribed.
+- **Resource locks** — `lock acquire/release/status/list`. One holder per
+  named resource, fail-fast: asking for a held lock gets an immediate no
+  (who holds it, since when), never a queue. Re-acquiring your own lock is
+  idempotent; releasing someone else's requires `-force`, always logged.
+- **Interest / event propagation** — `interest create/list/pause/resume/
+  inbox/ack`. Subscribe to a resource by name; a denied acquire or a
+  release notifies every active subscriber (an uncontested acquire stays
+  quiet — nobody needs telling that nothing happened). Deliverable by
+  polling `inbox`, or live over SSE via the optional `serve`.
+
+Not yet done: packaged releases, a versioned `v1.0.0` tag. Build from
+source for now.
+
+## Quickstart
+
+```
+go build -o bin/stratagema .
+
+DB=./demo.db
+BIN=./bin/stratagema
+
+alpha=$($BIN identity create -db=$DB -label=agent-alpha | head -1 | cut -d' ' -f2)
+beta=$($BIN identity create -db=$DB -label=agent-beta  | head -1 | cut -d' ' -f2)
+
+$BIN interest create -db=$DB -identity=$beta -resource=shared-config
+
+$BIN lock acquire -db=$DB -resource=shared-config -identity=$alpha -note="editing pool size"
+$BIN lock acquire -db=$DB -resource=shared-config -identity=$beta  # denied — alpha holds it
+$BIN interest inbox -db=$DB -identity=$beta                        # sees the denial
+
+$BIN lock release -db=$DB -resource=shared-config -identity=$alpha -note="pool size bumped, safe to read"
+$BIN interest inbox -db=$DB -identity=$beta                        # sees the release + note
+$BIN lock acquire -db=$DB -resource=shared-config -identity=$beta  # now succeeds
+```
+
+For live push instead of polling `inbox`, run `stratagema serve -db=$DB`
+in another terminal and `curl -sN "http://localhost:7979/stream/interest?identity=$beta"`.
 
 ## What this deliberately is not
 
