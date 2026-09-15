@@ -26,6 +26,11 @@ being described after the fact.
 Not yet done: packaged releases, a versioned `v1.0.0` tag. Build from
 source for now.
 
+**New here?** [`GETTING_STARTED.md`](GETTING_STARTED.md) walks through the
+one property this project has to get right — two agents, one resource,
+exactly one winner — by hand from a clean clone, then proves it under real
+concurrent processes. The Quickstart below is the fuller flow.
+
 ## Quickstart
 
 ```
