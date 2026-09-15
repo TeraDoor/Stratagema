@@ -1,0 +1,45 @@
+name: PR gate
+
+# Blocks merge until both placeholder markers from
+# .github/pull_request_template.md are gone from the PR description — i.e.
+# until whoever's merging has actually replaced them with a real manual
+# test description and confirmed they re-read the diff. Deleting a marker
+# without doing the thing it stands for is always possible; this can't
+# stop that, only make skipping the step a deliberate, visible act instead
+# of an accidental one.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+jobs:
+  manual-test-and-review-gate:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require manual-test and review markers to be gone
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          fail=0
+
+          if [ -z "$PR_BODY" ]; then
+            echo "::error::PR description is empty — fill in the template (What changed / How I tested it manually / Reviewed)."
+            exit 1
+          fi
+
+          if grep -q "STRATAGEMA-GATE:MANUAL-TEST" <<< "$PR_BODY"; then
+            echo "::error::'How I tested it manually' still has its placeholder marker — describe the real manual test you ran and delete the marker line."
+            fail=1
+          fi
+
+          if grep -q "STRATAGEMA-GATE:REVIEWED" <<< "$PR_BODY"; then
+            echo "::error::'Reviewed' still has its placeholder marker — delete it only after actually re-reading the full diff."
+            fail=1
+          fi
+
+          if [ "$fail" = "1" ]; then
+            exit 1
+          fi
+
+          echo "Manual-test and review confirmations present."
