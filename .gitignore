@@ -5,6 +5,8 @@
 # build artifacts
 bin/
 *.exe
+/stratagema
+/stratagema-e2e
 
 # local-only config
 .claude/settings.local.json
