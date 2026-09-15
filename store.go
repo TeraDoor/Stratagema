@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -31,7 +33,12 @@ func openStore(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// _busy_timeout/_journal_mode are the driver's dedicated DSN keys, not
+	// the generic _pragma=name(value) passthrough — real concurrent-writer
+	// testing (e2e_test.go) showed the generic form doesn't reliably apply
+	// busy_timeout before the first write, producing spurious SQLITE_BUSY
+	// under real multi-process contention.
+	db, err := sql.Open("sqlite", path+"?_busy_timeout=10000&_journal_mode=WAL")
 	if err != nil {
 		return nil, err
 	}
@@ -45,11 +52,41 @@ func openStore(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// exec is a drop-in for s.db.Exec that also retries on SQLite's transient
+// "database is locked" error. busy_timeout (set in the DSN above) is
+// supposed to make this unnecessary, but a real concurrent-process test
+// (e2e_test.go, TestConcurrentAcquireHasExactlyOneWinner — many processes
+// opening the same brand-new database file at once, which means racing on
+// schema creation too, not just on one row) showed it isn't sufficient by
+// itself. Every write in this file goes through this instead of s.db.Exec
+// directly, migrate() included, because migrate() racing on a fresh file
+// is exactly where this was first observed.
+func (s *Store) exec(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	var err error
+	for attempt := 0; attempt < 50; attempt++ {
+		res, err = s.db.Exec(query, args...)
+		if err == nil || !isBusyErr(err) {
+			return res, err
+		}
+		time.Sleep(time.Duration(5+attempt) * time.Millisecond)
+	}
+	return res, err
+}
+
+func isBusyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
+}
+
 // migrate is intentionally a flat CREATE TABLE IF NOT EXISTS block, no
 // migration framework — this schema is small enough that a version table
 // would be more ceremony than the thing it's protecting.
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
+	_, err := s.exec(`
 CREATE TABLE IF NOT EXISTS identities (
 	id         TEXT PRIMARY KEY,
 	label      TEXT NOT NULL,

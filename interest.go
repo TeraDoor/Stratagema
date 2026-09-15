@@ -33,7 +33,7 @@ func (s *Store) CreateInterest(identityID, resource, label string) (*Interest, e
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	if _, err := s.db.Exec(
+	if _, err := s.exec(
 		`INSERT INTO interests (id, identity_id, resource, status, label, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, identityID, resource, InterestActive, label, now,
 	); err != nil {
@@ -43,7 +43,7 @@ func (s *Store) CreateInterest(identityID, resource, label string) (*Interest, e
 }
 
 func (s *Store) SetInterestStatus(id, status string) error {
-	res, err := s.db.Exec(`UPDATE interests SET status = ? WHERE id = ?`, status, id)
+	res, err := s.exec(`UPDATE interests SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (s *Store) matchAndPropagate(resource string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec(
+		if _, err := s.exec(
 			`INSERT INTO propagations (id, interest_id, lock_event_id, identity_id, created_at) VALUES (?, ?, ?, ?, ?)`,
 			pid, in.ID, lockEventID, in.IdentityID, time.Now().UnixMilli(),
 		); err != nil {
@@ -161,7 +161,7 @@ func (s *Store) matchAndPropagate(resource string) error {
 }
 
 func (s *Store) AcknowledgePropagation(id string) error {
-	res, err := s.db.Exec(`UPDATE propagations SET acknowledged_at = ? WHERE id = ? AND acknowledged_at IS NULL`, time.Now().UnixMilli(), id)
+	res, err := s.exec(`UPDATE propagations SET acknowledged_at = ? WHERE id = ? AND acknowledged_at IS NULL`, time.Now().UnixMilli(), id)
 	if err != nil {
 		return err
 	}
