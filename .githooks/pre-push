@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Blocks `git push` while MANUAL_TEST.md has any unresolved item
+# (a line starting with "- [ ]"). The only way to clear one is to
+# actually do the manual test it describes and delete the line — see
+# MANUAL_TEST.md itself for why this exists and how it's meant to be used.
+#
+# Not installed automatically: git only runs hooks from this path once
+# you've opted in per clone with `git config core.hooksPath .githooks`.
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+file="$repo_root/MANUAL_TEST.md"
+
+if [ ! -f "$file" ]; then
+	exit 0
+fi
+
+# Only the "## Pending" section counts — the rest of the file (including
+# an illustrative example of the exact "- [ ]" syntax, inside a code
+# fence) must not itself be mistaken for a real pending item. Extracted
+# with awk, not grep -A, because the section's length varies and its end
+# is "the next ## heading," not a fixed line count. NR (original file
+# line number) is kept alongside each line so the error message below
+# points at the real line, not a re-numbered offset into the excerpt.
+pending_with_lines="$(awk '/^## Pending/{flag=1; next} /^## /{flag=0} flag{print NR": "$0}' "$file")"
+
+if grep -qE '^[0-9]+:\s*-\s*\[ \]' <<< "$pending_with_lines"; then
+	echo "" >&2
+	echo "push blocked: MANUAL_TEST.md has unresolved manual-test item(s):" >&2
+	echo "" >&2
+	grep -E '^[0-9]+:\s*-\s*\[ \]' <<< "$pending_with_lines" >&2
+	echo "" >&2
+	echo "Run these by hand, then delete each line — not check it off," >&2
+	echo "not comment it out, not --no-verify. See MANUAL_TEST.md." >&2
+	exit 1
+fi
+
+exit 0

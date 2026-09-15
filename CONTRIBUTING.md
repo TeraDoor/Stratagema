@@ -27,21 +27,26 @@ Bug fixes, docs, tests, and anything scoped to a single file don't need this
 4. Write a commit message that explains *why*, not just *what* — the diff
    already shows what changed.
 
-## The PR gate — no exceptions, including for the maintainer
+## The manual-test gate — no exceptions, including for the maintainer
 
-Every PR description starts from a template with two placeholder markers:
-one under "how I tested it manually," one under "reviewed." CI fails the
-PR — blocking merge — until both are gone, which only happens by actually
-replacing the placeholder text with a real description of what you ran by
-hand and confirming you re-read the full diff. `go test` passing is
-necessary but not sufficient here on purpose: automated tests only check
-what someone already thought to assert; this project's one real
-correctness bug so far (`e2e_test.go`'s concurrent-acquire race) was found
-by someone actually running the thing, not by a green test suite.
+`git push` is gated locally: run `git config core.hooksPath .githooks`
+once per clone, and `.githooks/pre-push` will refuse to push while
+`MANUAL_TEST.md` has any unresolved item. Clearing one means actually
+running the thing by hand and deleting the line yourself — not checking a
+box, not asserting it in a PR description. `go test` passing is necessary
+but not sufficient here on purpose: automated tests only check what
+someone already thought to assert; this project's one real correctness
+bug so far (`e2e_test.go`'s concurrent-acquire race) was found by someone
+actually running the thing, not by a green test suite. See
+`MANUAL_TEST.md` for the full mechanism, including the honest limits of a
+local hook (`--no-verify` skips it — that's true of any client-side git
+hook, not a gap specific to this one).
 
-This applies to `main` directly, too — there's no direct push, and no
-admin bypass on the required check. If you don't do the two things above,
-you can't merge, and neither can I.
+Once this repo has a GitHub remote, `.github/workflows/pr-gate.yml` adds
+the same idea at the PR level (a PR description's placeholder markers
+must be replaced with real content before CI passes) — dormant for now
+since nothing is pushed yet, and not a replacement for the local hook,
+which is what actually runs today.
 
 ## Code style
 

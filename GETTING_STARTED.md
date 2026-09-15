@@ -21,10 +21,16 @@ else here matters. It's proven under real concurrent processes in
 git clone https://github.com/TeraDoor/Stratagema.git
 cd Stratagema
 go build -o bin/stratagema .
+git config core.hooksPath .githooks
 ```
 
 Requires Go 1.23+. No other setup — no config file, no external service,
 no database server to start. `bin/stratagema` is the whole thing.
+
+That last line enables this repo's one piece of local process: `git push`
+is blocked while `MANUAL_TEST.md` has an unresolved item — see that file
+for why. It's a one-time, per-clone opt-in; git doesn't wire up a
+repo's committed hooks on its own.
 
 ## 2. Create two identities
 
