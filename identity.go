@@ -24,7 +24,7 @@ func (s *Store) CreateIdentity(label string) (*Identity, error) {
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	if _, err := s.db.Exec(`INSERT INTO identities (id, label, created_at) VALUES (?, ?, ?)`, id, label, now); err != nil {
+	if _, err := s.exec(`INSERT INTO identities (id, label, created_at) VALUES (?, ?, ?)`, id, label, now); err != nil {
 		return nil, err
 	}
 	return &Identity{ID: id, Label: label, CreatedAt: time.UnixMilli(now)}, nil

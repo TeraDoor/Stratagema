@@ -84,7 +84,7 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note strin
 	if forced {
 		f = 1
 	}
-	_, err = s.db.Exec(
+	_, err = s.exec(
 		`INSERT INTO lock_events (id, resource, kind, identity_id, holder_identity_id, note, forced, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, resource, kind, identityID, holderID, note, f, time.Now().UnixMilli(),
 	)
@@ -102,14 +102,52 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note strin
 // note, keeps the original acquired_at) rather than an error — an agent
 // re-running a step against a resource it still holds is a normal case,
 // not a conflict.
+//
+// The claim itself (the INSERT below) has to be a single atomic statement,
+// not a read-then-write: a real end-to-end test spawning genuinely
+// concurrent OS processes against this exact function (e2e_test.go,
+// TestConcurrentAcquireHasExactlyOneWinner) caught a prior version doing
+// "SELECT to check, then INSERT if free" — under real contention, two
+// processes could both see the resource as free and both proceed to
+// INSERT, with the loser hitting a raw SQLite UNIQUE-constraint error
+// instead of a clean, recorded "denied" event. `INSERT ... ON CONFLICT DO
+// NOTHING` makes the claim itself race-free at the database engine level;
+// everything after it only runs once the true outcome is already known.
 func (s *Store) AcquireLock(resource, identityID, note string) (*Lock, error) {
-	existing, err := s.GetLock(resource)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now().UnixMilli()
 
-	if existing != nil && existing.HolderID != identityID {
+	// Bounded retry only for the vanishingly rare window where the
+	// resource is released between our failed claim below and the
+	// GetLock that finds out why it failed — not a contention backoff.
+	for attempt := 0; attempt < 3; attempt++ {
+		res, err := s.exec(
+			`INSERT INTO locks (resource, holder_identity_id, note, acquired_at) VALUES (?, ?, ?, ?)
+			 ON CONFLICT(resource) DO NOTHING`,
+			resource, identityID, note, now,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			if _, err := s.recordLockEvent(resource, "acquired", identityID, identityID, note, false); err != nil {
+				return nil, err
+			}
+			return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: time.UnixMilli(now)}, nil
+		}
+
+		existing, err := s.GetLock(resource)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			continue // freed between our failed insert and this read — retry the claim
+		}
+		if existing.HolderID == identityID {
+			if _, err := s.exec(`UPDATE locks SET note = ? WHERE resource = ?`, note, resource); err != nil {
+				return nil, err
+			}
+			return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: existing.AcquiredAt}, nil
+		}
 		if _, err := s.recordLockEvent(resource, "denied", identityID, existing.HolderID, note, false); err != nil {
 			return nil, err
 		}
@@ -118,21 +156,7 @@ func (s *Store) AcquireLock(resource, identityID, note string) (*Lock, error) {
 		}
 		return nil, fmt.Errorf("%w: %s holds %q since %s", ErrLockHeld, existing.HolderID, resource, existing.AcquiredAt.UTC().Format(time.RFC3339))
 	}
-
-	if existing != nil {
-		if _, err := s.db.Exec(`UPDATE locks SET note = ? WHERE resource = ?`, note, resource); err != nil {
-			return nil, err
-		}
-		return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: existing.AcquiredAt}, nil
-	}
-
-	if _, err := s.db.Exec(`INSERT INTO locks (resource, holder_identity_id, note, acquired_at) VALUES (?, ?, ?, ?)`, resource, identityID, note, now); err != nil {
-		return nil, err
-	}
-	if _, err := s.recordLockEvent(resource, "acquired", identityID, identityID, note, false); err != nil {
-		return nil, err
-	}
-	return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: time.UnixMilli(now)}, nil
+	return nil, fmt.Errorf("lock acquire: too much contention on %q, try again", resource)
 }
 
 // ReleaseLock frees resource, and is always propagation-worthy — release
@@ -153,7 +177,7 @@ func (s *Store) ReleaseLock(resource, identityID, note string, force bool) error
 		return fmt.Errorf("resource %q is held by %s, not %s (use -force to override)", resource, existing.HolderID, identityID)
 	}
 
-	if _, err := s.db.Exec(`DELETE FROM locks WHERE resource = ?`, resource); err != nil {
+	if _, err := s.exec(`DELETE FROM locks WHERE resource = ?`, resource); err != nil {
 		return err
 	}
 	if _, err := s.recordLockEvent(resource, "released", identityID, existing.HolderID, note, existing.HolderID != identityID); err != nil {
