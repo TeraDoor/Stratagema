@@ -1,8 +1,6 @@
 package main
 
 import (
-	"database/sql"
-	"errors"
 	"flag"
 	"fmt"
 	"time"
@@ -28,21 +26,6 @@ func (s *Store) CreateIdentity(label string) (*Identity, error) {
 		return nil, err
 	}
 	return &Identity{ID: id, Label: label, CreatedAt: time.UnixMilli(now)}, nil
-}
-
-func (s *Store) GetIdentity(id string) (*Identity, error) {
-	row := s.db.QueryRow(`SELECT id, label, created_at FROM identities WHERE id = ?`, id)
-	var it Identity
-	var createdAt int64
-	err := row.Scan(&it.ID, &it.Label, &createdAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	it.CreatedAt = time.UnixMilli(createdAt)
-	return &it, nil
 }
 
 func (s *Store) ListIdentities() ([]*Identity, error) {
