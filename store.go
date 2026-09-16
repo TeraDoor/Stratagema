@@ -129,9 +129,28 @@ CREATE TABLE IF NOT EXISTS propagations (
 	acknowledged_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS strategies (
+	id         TEXT PRIMARY KEY,
+	name       TEXT NOT NULL,
+	thesis     TEXT NOT NULL,
+	status     TEXT NOT NULL, -- planning | active | observing | closed
+	created_at INTEGER NOT NULL,
+	closed_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS strategy_events (
+	id          TEXT PRIMARY KEY,
+	strategy_id TEXT NOT NULL,
+	kind        TEXT NOT NULL, -- step_started | step_completed | finding | decision | reflection
+	identity_id TEXT NOT NULL,
+	note        TEXT NOT NULL,
+	ts          INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_interests_resource   ON interests(resource);
 CREATE INDEX IF NOT EXISTS idx_propagations_identity ON propagations(identity_id);
 CREATE INDEX IF NOT EXISTS idx_lock_events_resource  ON lock_events(resource);
+CREATE INDEX IF NOT EXISTS idx_strategy_events_strategy ON strategy_events(strategy_id);
 `)
 	return err
 }
