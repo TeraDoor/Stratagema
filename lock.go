@@ -177,9 +177,40 @@ func (s *Store) ReleaseLock(resource, identityID, note string, force bool) error
 		return fmt.Errorf("resource %q is held by %s, not %s (use -force to override)", resource, existing.HolderID, identityID)
 	}
 
-	if _, err := s.exec(`DELETE FROM locks WHERE resource = ?`, resource); err != nil {
+	// Same fix as AcquireLock's TOCTOU race (S057): the check above reads
+	// a snapshot, so the delete itself has to be the single atomic
+	// operation that decides the real outcome, not a second statement
+	// trusting that snapshot is still true. Only the caller whose DELETE
+	// actually removes a row goes on to record the event and propagate —
+	// closes a real gap where two concurrent releases of the same lock
+	// (e.g. two overlapping -force calls) could otherwise both "succeed"
+	// and double-notify every subscriber for one real state change.
+	var res sql.Result
+	if force {
+		res, err = s.exec(`DELETE FROM locks WHERE resource = ?`, resource)
+	} else {
+		res, err = s.exec(`DELETE FROM locks WHERE resource = ? AND holder_identity_id = ?`, resource, identityID)
+	}
+	if err != nil {
 		return err
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if force {
+			// Someone else already freed it in the gap above — the
+			// intent ("this resource should be free") is already
+			// satisfied. Idempotent, not an error.
+			return nil
+		}
+		now, gerr := s.GetLock(resource)
+		if gerr != nil {
+			return gerr
+		}
+		if now == nil {
+			return fmt.Errorf("resource %q was already released (by someone else) before this call completed", resource)
+		}
+		return fmt.Errorf("resource %q is now held by %s, not %s (use -force to override)", resource, now.HolderID, identityID)
+	}
+
 	if _, err := s.recordLockEvent(resource, "released", identityID, existing.HolderID, note, existing.HolderID != identityID); err != nil {
 		return err
 	}
