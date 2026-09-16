@@ -121,6 +121,33 @@ go test -run TestConcurrentAcquireHasExactlyOneWinner -v ./...
 Run it a few times in a row (`-count=10`) if you want to see it hold up
 repeatedly rather than trust one lucky pass.
 
+## Two things this tool can't do for you
+
+Found by actually running two independent, real agents against the same
+file with no script telling them what to do — worth knowing before you
+rely on this for real work, not discovered the hard way:
+
+**Agree on resource names, or nothing is actually protected.** A lock is
+keyed by exact string match, with no discovery mechanism. Two agents that
+pick different names for the same real thing — one calling it
+`shared-config`, another calling it `project/shared/config.yaml` — will
+both get an uncontested "acquired," touch the same file, and Stratagema
+will have done nothing, because as far as it knows they were never
+touching the same resource at all. **Recommended convention: use the
+resource's own repo-relative file path as the resource name.** It's
+deterministic — two agents reading the same file independently converge
+on it without needing to agree in advance — which a flat, made-up name
+like `shared-config` can't guarantee.
+
+**A lock protects the metadata, not the file's content — re-read after
+you acquire, not before.** Reading a file, then acquiring its lock, then
+editing based on that earlier read is a race: whoever else held the lock
+in between could have changed the real content, and you'd silently
+overwrite their change with your stale copy. Stratagema has no way to
+prevent this — it owns lock state, not your file I/O. Always re-read the
+resource itself immediately after a successful `acquire`, right before
+you edit it, never before.
+
 ## What's next
 
 - The fuller flow — a subscriber finding out about a release *without*
