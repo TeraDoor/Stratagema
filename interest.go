@@ -28,6 +28,24 @@ type Interest struct {
 }
 
 func (s *Store) CreateInterest(identityID, resource, label string) (*Interest, error) {
+	if err := validResourceName(resource); err != nil {
+		return nil, err
+	}
+
+	// Idempotent: a durability pass found a client that times out and
+	// retries an identical `interest create` call (not knowing whether
+	// the first attempt actually landed — exactly the "connectivity
+	// loss" case) silently doubled, tripled, etc. its own future
+	// notifications. Same identity + same resource + still active is
+	// the same logical interest; return it rather than creating another.
+	existing, err := s.activeInterestFor(identityID, resource)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
 	id, err := newID("interest")
 	if err != nil {
 		return nil, err
@@ -40,6 +58,21 @@ func (s *Store) CreateInterest(identityID, resource, label string) (*Interest, e
 		return nil, err
 	}
 	return &Interest{ID: id, IdentityID: identityID, Resource: resource, Status: InterestActive, Label: label, CreatedAt: time.UnixMilli(now)}, nil
+}
+
+// activeInterestFor returns identityID's active interest on resource, if
+// one already exists, or (nil, nil).
+func (s *Store) activeInterestFor(identityID, resource string) (*Interest, error) {
+	row := s.db.QueryRow(
+		`SELECT id, identity_id, resource, status, label, created_at FROM interests
+		  WHERE identity_id = ? AND resource = ? AND status = ? LIMIT 1`,
+		identityID, resource, InterestActive,
+	)
+	in, err := scanInterest(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return in, err
 }
 
 func (s *Store) SetInterestStatus(id, status string) error {
@@ -139,9 +172,15 @@ func (s *Store) matchAndPropagate(resource string) error {
 	if len(interests) == 0 {
 		return nil
 	}
+	// rowid alone, not ts — a durability pass proved sorting by wall-clock
+	// ts first lets one process with a fast/wrong clock silently hijack
+	// every future propagation on a resource: insert a row timestamped
+	// far in the future once, and this query keeps picking it over every
+	// real, subsequent event indefinitely. rowid is SQLite's own
+	// monotonic insert order and is immune to clock skew by construction.
 	var lockEventID string
 	if err := s.db.QueryRow(
-		`SELECT id FROM lock_events WHERE resource = ? ORDER BY ts DESC, rowid DESC LIMIT 1`, resource,
+		`SELECT id FROM lock_events WHERE resource = ? ORDER BY rowid DESC LIMIT 1`, resource,
 	).Scan(&lockEventID); err != nil {
 		return err
 	}
