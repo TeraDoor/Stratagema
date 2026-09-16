@@ -97,6 +97,20 @@ func locksHandler(store *Store) http.HandlerFunc {
 	}
 }
 
+// newMux builds the real routing table — pulled out of cmdServe so a test
+// can exercise the actual handlers over real HTTP (httptest.NewServer)
+// instead of only via manual curl during development, which is all this
+// had until now.
+func newMux(store *Store) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":true}`))
+	})
+	mux.HandleFunc("/locks", locksHandler(store))
+	mux.HandleFunc("/stream/interest", sseStreamInterestHandler(store))
+	return mux
+}
+
 func cmdServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
@@ -109,13 +123,7 @@ func cmdServe(args []string) int {
 	}
 	defer store.Close()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"ok":true}`))
-	})
-	mux.HandleFunc("/locks", locksHandler(store))
-	mux.HandleFunc("/stream/interest", sseStreamInterestHandler(store))
-
+	mux := newMux(store)
 	addr := fmt.Sprintf(":%d", *port)
 	fmt.Printf("stratagema serve  http://localhost%s\n\n", addr)
 	fmt.Println("  GET /health                          health check")
