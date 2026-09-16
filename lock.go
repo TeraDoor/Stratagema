@@ -5,8 +5,22 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 	"time"
 )
+
+// validResourceName rejects a resource name a durability pass proved
+// corrupts `lock list`'s plain-text display once it's stored — a name
+// containing an embedded newline. Checked at the one or two places a
+// resource name is first written (AcquireLock, CreateInterest), not on
+// every read, since that's the only point that can keep it out of the
+// database in the first place.
+func validResourceName(resource string) error {
+	if strings.ContainsAny(resource, "\n\r") {
+		return fmt.Errorf("resource name must not contain newlines")
+	}
+	return nil
+}
 
 // Lock is the whole coordination primitive: one row per named resource,
 // at most one holder at a time. No queueing, no expiry — see the doc
@@ -114,6 +128,9 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note strin
 // NOTHING` makes the claim itself race-free at the database engine level;
 // everything after it only runs once the true outcome is already known.
 func (s *Store) AcquireLock(resource, identityID, note string) (*Lock, error) {
+	if err := validResourceName(resource); err != nil {
+		return nil, err
+	}
 	now := time.Now().UnixMilli()
 
 	// Bounded retry only for the vanishingly rare window where the
