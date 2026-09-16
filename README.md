@@ -69,6 +69,31 @@ in another terminal and `curl -sN "http://localhost:7979/stream/interest?identit
   curl script from a shell — it does not care what is driving the agent on
   either end.
 
+## Known limitations
+
+Found by an actual durability/edge-case pass, not theoretical — stated
+here rather than left for someone to discover:
+
+- **No identity authentication.** An `-identity=` value is a bare,
+  unverified string everywhere. Any process that can reach the database
+  can acquire, release, or force-release a lock under any identity,
+  including one it doesn't "own." Fine for one trusted developer's own
+  machine; a real gap before recommending shared, less-trusted, or
+  adversarial use.
+- **SSE reconnect does a full replay, not a resume.** `/stream/interest`
+  has no durable cursor across a `serve` restart — a client that
+  reconnects gets everything again from the start, not just what it
+  missed. Fine for the CLI's own polling fallback (`interest inbox`
+  isn't affected); a gap if you're building something that assumes
+  exactly-once live delivery.
+- **WAL mode's safety over a network filesystem is unverified, and
+  SQLite's own documentation warns against it.** Putting the database
+  file on NFS or similar isn't tested and isn't recommended — keep it on
+  local disk, one machine, until this is specifically addressed.
+- **No schema-version check.** Two binary versions with an incompatible
+  schema sharing one database file isn't detected or prevented — keep
+  the binary in sync across every process touching the same database.
+
 ## Who this is for
 
 A solo developer running more than one agent against the same project who
