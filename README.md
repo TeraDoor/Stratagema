@@ -11,7 +11,7 @@ The steering mechanism this is built around is called **intent transfer** —
 the definition is still being worked out in the open, not a finished concept
 being described after the fact.
 
-## Status: early, both primitives implemented and dry-run tested
+## Status: early, four primitives real and tested
 
 - **Resource locks** — `lock acquire/release/status/list`. One holder per
   named resource, fail-fast: asking for a held lock gets an immediate no
@@ -22,9 +22,20 @@ being described after the fact.
   release notifies every active subscriber (an uncontested acquire stays
   quiet — nobody needs telling that nothing happened). Deliverable by
   polling `inbox`, or live over SSE via the optional `serve`.
+- **Strategy ledger** — `strategy create/list/show/log/activate/observe/
+  close`. An append-only record of what agents actually found and decided
+  while working — not locks-and-notifications, a durable log a human or
+  another agent can read back later. Closing a strategy always logs a
+  real final event, not just a status flip.
+- **Faculty tooling** — `faculty create/list/show`. A Faculty is an
+  agent-role definition (a markdown file: settings up top, behavior in
+  prose below). The format was already usable by hand; this is scaffolding,
+  listing, and viewing them without hand-editing files directly.
 
-Not yet done: packaged releases, a versioned `v1.0.0` tag. Build from
-source for now.
+Not yet done: a Planner that proposes a strategy from a one-line intent, a
+way for a strategy to stay open and keep collecting findings after
+whatever it built has shipped, and packaged releases / a versioned
+`v1.0.0` tag. Build from source for now.
 
 **New here?** [`GETTING_STARTED.md`](GETTING_STARTED.md) walks through the
 one property this project has to get right — two agents, one resource,
