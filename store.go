@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS strategies (
 	thesis     TEXT NOT NULL,
 	status     TEXT NOT NULL, -- planning | active | observing | closed
 	created_at INTEGER NOT NULL,
-	closed_at  INTEGER
+	closed_at  INTEGER,
+	group_name TEXT -- optional: several strategies belonging to one larger effort. Named group_name, not group -- group is a reserved word in some SQL contexts.
 );
 
 CREATE TABLE IF NOT EXISTS strategy_events (
