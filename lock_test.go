@@ -85,6 +85,80 @@ func TestLockAndNotifyEndToEnd(t *testing.T) {
 	}
 }
 
+// TestDependencyResourceWriteNotifiesWatchersIfAny covers the scenario
+// named directly: an agent write-locks a resource other agents' work
+// depends on, and only the agents that actually registered an interest
+// in it get notified when it changes — an agent that never watched it
+// hears nothing, and a second, completely unwatched resource can be
+// locked and released with zero propagations and no error, not a crash
+// on an empty interest list.
+func TestDependencyResourceWriteNotifiesWatchersIfAny(t *testing.T) {
+	s := newTestStore(t)
+
+	writer, err := s.CreateIdentity("schema-migrator")
+	if err != nil {
+		t.Fatalf("CreateIdentity(writer): %v", err)
+	}
+	watcher, err := s.CreateIdentity("api-layer-agent")
+	if err != nil {
+		t.Fatalf("CreateIdentity(watcher): %v", err)
+	}
+	bystander, err := s.CreateIdentity("unrelated-agent")
+	if err != nil {
+		t.Fatalf("CreateIdentity(bystander): %v", err)
+	}
+
+	// api-layer-agent's own work depends on this resource, so it
+	// registers a real interest before any write happens.
+	if _, err := s.CreateInterest(watcher.ID, "pkg/db/schema.go", "api layer reads the schema, needs to know when it changes"); err != nil {
+		t.Fatalf("CreateInterest(watcher): %v", err)
+	}
+
+	if _, err := s.AcquireLock("pkg/db/schema.go", writer.ID, "adding a column, will notify on release", ""); err != nil {
+		t.Fatalf("AcquireLock(writer): %v", err)
+	}
+	if err := s.ReleaseLock("pkg/db/schema.go", writer.ID, "column added, schema.go changed", false); err != nil {
+		t.Fatalf("ReleaseLock(writer): %v", err)
+	}
+
+	watcherInbox, err := s.ListPropagationsForIdentity(watcher.ID, true)
+	if err != nil {
+		t.Fatalf("ListPropagationsForIdentity(watcher): %v", err)
+	}
+	if len(watcherInbox) != 1 || watcherInbox[0].Kind != "released" || watcherInbox[0].Resource != "pkg/db/schema.go" {
+		t.Fatalf("watcher: want one 'released' delivery for pkg/db/schema.go, got %+v", watcherInbox)
+	}
+
+	bystanderInbox, err := s.ListPropagationsForIdentity(bystander.ID, true)
+	if err != nil {
+		t.Fatalf("ListPropagationsForIdentity(bystander): %v", err)
+	}
+	if len(bystanderInbox) != 0 {
+		t.Fatalf("bystander never registered an interest, want zero deliveries, got %+v", bystanderInbox)
+	}
+
+	// A second resource nobody ever watched: lock+release must still
+	// succeed cleanly, with matchAndPropagate's zero-interests path
+	// exercised for real rather than assumed safe.
+	if _, err := s.AcquireLock("pkg/cache/evictor.go", writer.ID, "tuning eviction policy", ""); err != nil {
+		t.Fatalf("AcquireLock(unwatched resource): %v", err)
+	}
+	if err := s.ReleaseLock("pkg/cache/evictor.go", writer.ID, "eviction policy tuned", false); err != nil {
+		t.Fatalf("ReleaseLock(unwatched resource): %v", err)
+	}
+	for _, id := range []string{writer.ID, watcher.ID, bystander.ID} {
+		inbox, err := s.ListPropagationsForIdentity(id, true)
+		if err != nil {
+			t.Fatalf("ListPropagationsForIdentity(%s) after unwatched release: %v", id, err)
+		}
+		for _, d := range inbox {
+			if d.Resource == "pkg/cache/evictor.go" {
+				t.Fatalf("no identity registered interest in pkg/cache/evictor.go, want zero deliveries for it, got %+v", d)
+			}
+		}
+	}
+}
+
 func TestReleaseRequiresHolderUnlessForced(t *testing.T) {
 	s := newTestStore(t)
 	alpha, _ := s.CreateIdentity("agent-alpha")
