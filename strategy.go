@@ -231,11 +231,62 @@ func (s *Store) ListStrategyEvents(strategyID string) ([]*StrategyEvent, error) 
 	return out, rows.Err()
 }
 
+// recentEventsCap is how many trailing events `strategy next` shows as
+// "recent" — the concise recap an agent resuming work actually needs,
+// not the full log (`strategy show` already prints everything, in
+// order, with no cutoff). Fixed rather than a flag: this command exists
+// specifically to make the "how much is enough" call so every caller
+// doesn't have to, and a knob here would just push that judgment back
+// onto them.
+const recentEventsCap = 10
+
+// RecentStrategyEvents returns the events `strategy next` treats as
+// "what's happened recently, worth recapping before resuming work":
+// everything from the strategy's most recent step_completed event
+// onward, inclusive of that event itself, or the whole log if no
+// step_completed has ever been logged.
+//
+// Why step_completed as the cutoff: it's the one event kind an agent
+// chooses to write specifically to mean "one self-contained unit of
+// work here is actually done" — step_started, finding, decision, and
+// reflection are all things that happen *during* a unit of work,
+// step_completed is the marker that a unit of work ended. That makes it
+// the natural boundary between "already settled, a resuming agent
+// doesn't need to re-derive it" and "happened since, still live
+// context" — including the boundary event itself means the recap always
+// shows what that last completed step even was, not just what came
+// after it. If a strategy has never logged a step_completed (e.g. it's
+// still mid-first-step), there's no such boundary yet, so the whole log
+// counts as "current."
+//
+// Either way the window is capped at recentEventsCap events, counting
+// from the end — a strategy that runs long stretches without ever
+// calling step_completed again would otherwise make "recent" balloon to
+// the entire history, which defeats the point of a concise recap.
+func (s *Store) RecentStrategyEvents(strategyID string) ([]*StrategyEvent, error) {
+	all, err := s.ListStrategyEvents(strategyID)
+	if err != nil {
+		return nil, err
+	}
+	start := 0
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i].Kind == "step_completed" {
+			start = i
+			break
+		}
+	}
+	recent := all[start:]
+	if len(recent) > recentEventsCap {
+		recent = recent[len(recent)-recentEventsCap:]
+	}
+	return recent, nil
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────
 
 func cmdStrategy(args []string) int {
 	if len(args) == 0 {
-		fmt.Println("usage: stratagema strategy <create|list|show|log|activate|observe|close> [flags]")
+		fmt.Println("usage: stratagema strategy <create|list|show|log|activate|observe|close|next> [flags]")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
@@ -254,8 +305,10 @@ func cmdStrategy(args []string) int {
 		return cmdStrategySetStatus(rest, StrategyObserving)
 	case "close":
 		return cmdStrategyClose(rest)
+	case "next":
+		return cmdStrategyNext(rest)
 	default:
-		return die(2, "strategy: unknown subcommand %q (create|list|show|log|activate|observe|close)", sub)
+		return die(2, "strategy: unknown subcommand %q (create|list|show|log|activate|observe|close|next)", sub)
 	}
 }
 
@@ -431,5 +484,88 @@ func cmdStrategyClose(args []string) int {
 		return die(1, "strategy close: %v", err)
 	}
 	fmt.Printf("%s: closed\n", rest[0])
+	return 0
+}
+
+// cmdStrategyNext prints a concise, structured recap for an agent (or
+// human) resuming work on a strategy: its current status and thesis, the
+// recent slice of its event log (see RecentStrategyEvents for the
+// cutoff), and every lock currently held system-wide as a "here's what's
+// contested right now" courtesy — strategies and locks aren't formally
+// linked in the schema, so this is every held lock, not just ones this
+// strategy is presumed to care about.
+//
+// Deliberately does not decide anything: no "recommended next step," no
+// scoring, no filtering by relevance, no call to any LLM or external
+// service. That line is the whole point of this command — Stratagema
+// stays infrastructure, the calling agent brings the reasoning. This
+// prints state; what to do about it is the caller's call, every time.
+func cmdStrategyNext(args []string) int {
+	fs := flag.NewFlagSet("strategy next", flag.ExitOnError)
+	dbFlag := dbPathFlag(fs)
+	fs.Parse(args)
+
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return die(1, "strategy next: strategy id required")
+	}
+	store, err := openStore(*dbFlag)
+	if err != nil {
+		return die(1, "strategy next: %v", err)
+	}
+	defer store.Close()
+
+	st, err := store.GetStrategy(rest[0])
+	if err != nil {
+		return die(1, "strategy next: %v", err)
+	}
+	if st == nil {
+		return die(1, "strategy next: strategy %s not found", rest[0])
+	}
+
+	all, err := store.ListStrategyEvents(st.ID)
+	if err != nil {
+		return die(1, "strategy next: %v", err)
+	}
+	recent, err := store.RecentStrategyEvents(st.ID)
+	if err != nil {
+		return die(1, "strategy next: %v", err)
+	}
+
+	fmt.Printf("%s  %s\n", st.ID, st.Name)
+	fmt.Printf("  status:  %s\n", st.Status)
+	fmt.Printf("  thesis:  %s\n", st.Thesis)
+	fmt.Printf("  created: %s\n", st.CreatedAt.UTC().Format(time.RFC3339))
+	if st.ClosedAt != nil {
+		fmt.Printf("  closed:  %s\n", st.ClosedAt.UTC().Format(time.RFC3339))
+	}
+
+	fmt.Println()
+	if len(all) == 0 {
+		fmt.Println("  recent events: (none logged yet)")
+	} else {
+		cutoff := "since last step_completed"
+		if len(recent) == len(all) {
+			cutoff = "no step_completed logged yet — this is the full log"
+		}
+		fmt.Printf("  recent events (%d of %d total, %s):\n", len(recent), len(all), cutoff)
+		for _, ev := range recent {
+			fmt.Printf("    %s  %-15s  %-9s  by=%s  %s\n", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.Kind, ev.IdentityID, ev.Note)
+		}
+	}
+
+	fmt.Println()
+	locks, err := store.ListLocks()
+	if err != nil {
+		return die(1, "strategy next: %v", err)
+	}
+	if len(locks) == 0 {
+		fmt.Println("  locks held system-wide: none")
+	} else {
+		fmt.Println("  locks held system-wide (informational only — not linked to this strategy):")
+		for _, l := range locks {
+			fmt.Printf("    %-24s  holder=%-20s  since=%s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339))
+		}
+	}
 	return 0
 }
