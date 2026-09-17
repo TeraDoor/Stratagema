@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -383,6 +385,167 @@ func TestRecentStrategyEventsCapsEvenWithoutStepCompleted(t *testing.T) {
 	}
 	if recent[len(recent)-1].ID != last.ID {
 		t.Fatalf("want the cap to keep the most recent events (tail), last got %+v, want id %s", recent[len(recent)-1], last.ID)
+	}
+}
+
+// TestResourceUsageNoteRoundTrip proves resourceUsageNote and
+// parseResourceUsageNote are actual inverses across the shapes log-usage
+// can produce: with cost, without cost, and zero tokens (a real, loggable
+// amount, not a sentinel for "unset" at this layer).
+func TestResourceUsageNoteRoundTrip(t *testing.T) {
+	cases := []struct {
+		name    string
+		harness string
+		tokens  int64
+		cost    float64
+		hasCost bool
+	}{
+		{"with cost", "claude-code", 42000, 1.23, true},
+		{"without cost", "codex", 900, 0, false},
+		{"zero tokens", "claude-code", 0, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			note := resourceUsageNote(tc.harness, tc.tokens, tc.cost, tc.hasCost)
+			got, err := parseResourceUsageNote(note)
+			if err != nil {
+				t.Fatalf("parseResourceUsageNote(%q): %v", note, err)
+			}
+			if got.Harness != tc.harness || got.Tokens != tc.tokens || got.HasCost != tc.hasCost {
+				t.Fatalf("parseResourceUsageNote(%q) = %+v, want harness=%s tokens=%d hasCost=%v", note, got, tc.harness, tc.tokens, tc.hasCost)
+			}
+			if tc.hasCost && got.Cost != tc.cost {
+				t.Fatalf("parseResourceUsageNote(%q): cost = %v, want %v", note, got.Cost, tc.cost)
+			}
+			if !tc.hasCost && strings.Contains(note, "cost=") {
+				t.Fatalf("resourceUsageNote(%q, hasCost=false) should omit cost entirely, got %q", tc.name, note)
+			}
+		})
+	}
+}
+
+// TestParseResourceUsageNoteRejectsMalformed proves the parser errors
+// cleanly on shapes it doesn't recognize — freeform prose from the old
+// `strategy log -kind=resource_usage -note="..."` path, a hand-edited
+// note, or a value that isn't valid for its field — rather than guessing
+// or panicking. strategy usage relies on this to skip-and-report instead
+// of crashing.
+func TestParseResourceUsageNoteRejectsMalformed(t *testing.T) {
+	cases := []string{
+		"42000 tokens, claude-code",              // freeform prose, pre-log-usage format
+		"harness=claude-code",                    // missing tokens
+		"tokens=42000",                           // missing harness
+		"harness= tokens=42000",                  // empty harness value
+		"harness=claude-code tokens=-5",          // negative tokens
+		"harness=claude-code tokens=abc",         // non-numeric tokens
+		"harness=claude-code tokens=1 cost=abc",  // non-numeric cost
+		"harness=claude-code tokens=1 mystery=1", // unknown field
+		"",                                       // empty note
+	}
+	for _, note := range cases {
+		if _, err := parseResourceUsageNote(note); err == nil {
+			t.Errorf("parseResourceUsageNote(%q): want an error, got nil", note)
+		}
+	}
+}
+
+// TestCmdStrategyLogUsageRejectsMissingRequiredFlags exercises the CLI
+// validation path directly (captureOutput, no subprocess) for each
+// required flag left unset in turn: -identity, -harness, and -tokens
+// (which has no natural zero value for "unset", so it defaults to -1 and
+// any negative value is rejected the same way).
+func TestCmdStrategyLogUsageRejectsMissingRequiredFlags(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	s, err := openStore(db)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	alpha, err := s.CreateIdentity("agent-alpha")
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	st, err := s.CreateStrategy("probe", "thesis")
+	if err != nil {
+		t.Fatalf("CreateStrategy: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"missing identity", []string{"-db=" + db, "-harness=claude-code", "-tokens=100", st.ID}},
+		{"missing harness", []string{"-db=" + db, "-identity=" + alpha.ID, "-tokens=100", st.ID}},
+		{"missing tokens", []string{"-db=" + db, "-identity=" + alpha.ID, "-harness=claude-code", st.ID}},
+		{"missing strategy id", []string{"-db=" + db, "-identity=" + alpha.ID, "-harness=claude-code", "-tokens=100"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, code := captureOutput(t, func() int {
+				return cmdStrategyLogUsage(tc.args)
+			})
+			if code == 0 {
+				t.Fatalf("cmdStrategyLogUsage(%v): want a non-zero exit code, got 0, output:\n%s", tc.args, out)
+			}
+		})
+	}
+}
+
+// TestCmdStrategyUsageMalformedNoteDoesNotCrash proves strategy usage's
+// "report the problem, don't hide or crash on it" handling of a note that
+// doesn't parse: it must still show the event raw, exclude it from the
+// harness totals, report a non-zero exit code, and — the actual point —
+// must not panic, while any well-formed events alongside it still total
+// correctly.
+func TestCmdStrategyUsageMalformedNoteDoesNotCrash(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	s, err := openStore(db)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	alpha, err := s.CreateIdentity("agent-alpha")
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	st, err := s.CreateStrategy("probe", "thesis")
+	if err != nil {
+		t.Fatalf("CreateStrategy: %v", err)
+	}
+
+	// A pre-log-usage freeform note, written the way `strategy log
+	// -kind=resource_usage` allowed before this format existed.
+	if _, err := s.LogStrategyEvent(st.ID, alpha.ID, "resource_usage", "roughly 5000 tokens on claude-code"); err != nil {
+		t.Fatalf("LogStrategyEvent (freeform): %v", err)
+	}
+	if _, err := s.LogStrategyEvent(st.ID, alpha.ID, "resource_usage", resourceUsageNote("claude-code", 1000, 0.5, true)); err != nil {
+		t.Fatalf("LogStrategyEvent (structured): %v", err)
+	}
+
+	var out string
+	var code int
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("cmdStrategyUsage panicked on a malformed note: %v", r)
+			}
+		}()
+		out, code = captureOutput(t, func() int {
+			return cmdStrategyUsage([]string{"-db=" + db, st.ID})
+		})
+	}()
+
+	if code == 0 {
+		t.Fatalf("cmdStrategyUsage: want a non-zero exit code when a note fails to parse, got 0, output:\n%s", out)
+	}
+	if !strings.Contains(out, "roughly 5000 tokens on claude-code") {
+		t.Fatalf("cmdStrategyUsage: want the malformed note shown raw, got:\n%s", out)
+	}
+	if !strings.Contains(out, "skipping") {
+		t.Fatalf("cmdStrategyUsage: want the parse failure reported, got:\n%s", out)
+	}
+	if !strings.Contains(out, "tokens=1000") || !strings.Contains(out, "cost=0.50") {
+		t.Fatalf("cmdStrategyUsage: want the well-formed event's totals (tokens=1000, cost=0.50), got:\n%s", out)
 	}
 }
 
