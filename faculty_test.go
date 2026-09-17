@@ -129,6 +129,95 @@ func TestParseFacultyRealExamples(t *testing.T) {
 	}
 }
 
+// ── ParseFaculty: core field ────────────────────────────────────────────
+
+// TestParseFacultyCoreOptional confirms the two real fixtures parsed above
+// — written before `core` existed — still parse cleanly with Core == "".
+// This is the backward-compatibility guarantee the field was added under:
+// a frontmatter key absent from a file predates this change entirely, not
+// just an unset optional value.
+func TestParseFacultyCoreOptional(t *testing.T) {
+	for _, file := range []string{"testdata/builder.md", "testdata/observer.md"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("reading %s: %v", file, err)
+		}
+		got, err := ParseFaculty(data)
+		if err != nil {
+			t.Fatalf("ParseFaculty(%s): %v", file, err)
+		}
+		if got.Core != "" {
+			t.Errorf("ParseFaculty(%s): Core = %q, want empty (file predates the core field)", file, got.Core)
+		}
+	}
+}
+
+// TestParseFacultyCoreValidValues confirms each of the four domain-neutral
+// lifecycle stages parses and round-trips through render.
+func TestParseFacultyCoreValidValues(t *testing.T) {
+	for _, core := range []string{"plan", "produce", "verify", "deliver"} {
+		input := "---\n" +
+			"name: builder\n" +
+			"capability: go-development\n" +
+			"harness: claude-code\n" +
+			"tools: [read_file]\n" +
+			"core: " + core + "\n" +
+			"---\n" +
+			"body\n"
+		got, err := ParseFaculty([]byte(input))
+		if err != nil {
+			t.Fatalf("ParseFaculty(core=%s): %v", core, err)
+		}
+		if got.Core != core {
+			t.Errorf("ParseFaculty(core=%s): Core = %q, want %q", core, got.Core, core)
+		}
+
+		rendered := got.render()
+		reparsed, err := ParseFaculty([]byte(rendered))
+		if err != nil {
+			t.Fatalf("re-parsing rendered output for core=%s: %v", core, err)
+		}
+		if reparsed.Core != core {
+			t.Errorf("round-trip core=%s: got %q after render+reparse", core, reparsed.Core)
+		}
+	}
+}
+
+// TestParseFacultyCoreInvalidValue confirms a core value outside the four
+// allowed stages is a real, specific parse error — not silently ignored
+// (which would hide an author's typo) and not a generic failure.
+func TestParseFacultyCoreInvalidValue(t *testing.T) {
+	input := "---\n" +
+		"name: builder\n" +
+		"capability: go-development\n" +
+		"harness: claude-code\n" +
+		"tools: [read_file]\n" +
+		"core: deploy\n" +
+		"---\n" +
+		"body\n"
+	_, err := ParseFaculty([]byte(input))
+	if !errors.Is(err, ErrInvalidCore) {
+		t.Fatalf("ParseFaculty(core=deploy): got error %v, want it to wrap ErrInvalidCore", err)
+	}
+}
+
+// TestFacultyRenderOmitsCoreWhenUnset confirms a Faculty created without
+// -core (the common case today) round-trips with no "core:" line at all,
+// not an empty one — the actual backward-compatibility contract, checked
+// against the rendered bytes rather than just the parsed struct.
+func TestFacultyRenderOmitsCoreWhenUnset(t *testing.T) {
+	f := &Faculty{
+		Name:       "builder",
+		Capability: "go-development",
+		Harness:    "claude-code",
+		Tools:      []string{"read_file"},
+		Body:       "body",
+	}
+	if strings.Contains(f.render(), "core:") {
+		t.Fatalf("render() with unset Core contains a \"core:\" line:\n%s", f.render())
+	}
+}
+
 // ── ParseFaculty: malformed input ───────────────────────────────────────
 
 func TestParseFacultyMalformed(t *testing.T) {
@@ -249,6 +338,110 @@ func TestFacultyCreateListShow(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("faculty show: want %q in output, got:\n%s", want, out)
 		}
+	}
+}
+
+// TestFacultyCreateListShowWithCore mirrors TestFacultyCreateListShow but
+// exercises the optional -core flag end to end: created, surfaced in list,
+// surfaced in show.
+func TestFacultyCreateListShowWithCore(t *testing.T) {
+	dir := t.TempDir()
+
+	out, code := captureOutput(t, func() int {
+		return cmdFacultyCreate([]string{
+			"-faculties-dir=" + dir,
+			"-name=leader",
+			"-capability=orchestration",
+			"-harness=claude-code",
+			"-tools=read_file",
+			"-core=plan",
+		})
+	})
+	if code != 0 {
+		t.Fatalf("faculty create -core=plan: exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "core:       plan") {
+		t.Fatalf("faculty create -core=plan: want core echoed in output, got:\n%s", out)
+	}
+
+	out, code = captureOutput(t, func() int {
+		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+	})
+	if code != 0 {
+		t.Fatalf("faculty list: exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "plan") {
+		t.Fatalf("faculty list: want core \"plan\" in output, got:\n%s", out)
+	}
+
+	out, code = captureOutput(t, func() int {
+		return cmdFacultyShow([]string{"-faculties-dir=" + dir, "leader"})
+	})
+	if code != 0 {
+		t.Fatalf("faculty show: exit %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "core:       plan") {
+		t.Fatalf("faculty show: want core in output, got:\n%s", out)
+	}
+}
+
+// TestFacultyCreateRejectsInvalidCore confirms the CLI validates -core
+// up front rather than writing a file that would fail to parse later.
+func TestFacultyCreateRejectsInvalidCore(t *testing.T) {
+	dir := t.TempDir()
+
+	out, code := captureOutput(t, func() int {
+		return cmdFacultyCreate([]string{
+			"-faculties-dir=" + dir,
+			"-name=leader",
+			"-capability=orchestration",
+			"-harness=claude-code",
+			"-tools=read_file",
+			"-core=deploy",
+		})
+	})
+	if code == 0 {
+		t.Fatalf("faculty create -core=deploy: want non-zero exit, output:\n%s", out)
+	}
+	if !strings.Contains(out, "core value must be one of") {
+		t.Fatalf("faculty create -core=deploy: want ErrInvalidCore message, got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "leader.md")); !os.IsNotExist(err) {
+		t.Fatalf("faculty create -core=deploy: rejected create should not leave a file behind")
+	}
+}
+
+// TestFacultyCreateListShowWithoutCoreStillWorks confirms omitting -core
+// (the pre-existing default path) is unaffected: no core line anywhere,
+// list still aligns, show still succeeds. The direct regression check for
+// this change's backward-compatibility claim at the CLI layer.
+func TestFacultyCreateListShowWithoutCoreStillWorks(t *testing.T) {
+	dir := t.TempDir()
+
+	out, code := captureOutput(t, func() int {
+		return cmdFacultyCreate([]string{
+			"-faculties-dir=" + dir,
+			"-name=builder",
+			"-capability=go-development",
+			"-harness=claude-code",
+			"-tools=read_file",
+		})
+	})
+	if code != 0 {
+		t.Fatalf("faculty create without -core: exit %d, output:\n%s", code, out)
+	}
+	if strings.Contains(out, "core:") {
+		t.Fatalf("faculty create without -core: unexpected core line in output:\n%s", out)
+	}
+
+	out, code = captureOutput(t, func() int {
+		return cmdFacultyShow([]string{"-faculties-dir=" + dir, "builder"})
+	})
+	if code != 0 {
+		t.Fatalf("faculty show: exit %d, output:\n%s", code, out)
+	}
+	if strings.Contains(out, "core:") {
+		t.Fatalf("faculty show without -core: unexpected core line in output:\n%s", out)
 	}
 }
 
