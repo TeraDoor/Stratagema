@@ -23,10 +23,13 @@ being described after the fact.
   quiet — nobody needs telling that nothing happened). Deliverable by
   polling `inbox`, or live over SSE via the optional `serve`.
 - **Strategy ledger** — `strategy create/list/show/log/activate/observe/
-  close`. An append-only record of what agents actually found and decided
-  while working — not locks-and-notifications, a durable log a human or
-  another agent can read back later. Closing a strategy always logs a
-  real final event, not just a status flip.
+  close/next`. An append-only record of what agents actually found and
+  decided while working — not locks-and-notifications, a durable log a
+  human or another agent can read back later. Closing a strategy always
+  logs a real final event, not just a status flip. `next` gives an agent
+  resuming work a concise recap (events since the last completed step,
+  plus every lock currently held system-wide) — it only reads and prints,
+  never recommends or decides; that stays the calling agent's job.
 - **Faculty tooling** — `faculty create/list/show`. A Faculty is an
   agent-role definition (a markdown file: settings up top, behavior in
   prose below). The format was already usable by hand; this is scaffolding,
