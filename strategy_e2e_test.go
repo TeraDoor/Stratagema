@@ -216,6 +216,75 @@ func TestStrategyGroupCreateListFilterShow(t *testing.T) {
 	}
 }
 
+// TestStrategyLogUsageAndUsageRoundTrip is the CLI-level proof for
+// log-usage + usage, run through the real compiled binary: log-usage
+// twice under two different harnesses (one with a cost, one without),
+// then confirm `strategy usage` reports per-harness totals that actually
+// sum what was logged, plus the raw per-event lines.
+func TestStrategyLogUsageAndUsageRoundTrip(t *testing.T) {
+	bin := buildBinary(t)
+	db := filepath.Join(t.TempDir(), "strategy-usage.db")
+
+	run := func(cmd, sub string, rest ...string) (int, string) {
+		var flags, positional []string
+		for _, a := range rest {
+			if strings.HasPrefix(a, "-") {
+				flags = append(flags, a)
+			} else {
+				positional = append(positional, a)
+			}
+		}
+		full := append([]string{cmd, sub, "-db=" + db}, flags...)
+		full = append(full, positional...)
+		out, err := exec.Command(bin, full...).CombinedOutput()
+		switch e := err.(type) {
+		case nil:
+			return 0, string(out)
+		case *exec.ExitError:
+			return e.ExitCode(), string(out)
+		default:
+			t.Fatalf("unexpected error running binary: %v", err)
+			return -1, ""
+		}
+	}
+
+	idCode, idOut := run("identity", "create", "-label=faculty-1")
+	identity := extractID(t, idCode, idOut)
+
+	createCode, createOut := run("strategy", "create", "-name=usage-probe", "-thesis=structured usage logs stay comparable across harnesses")
+	stratID := extractID(t, createCode, createOut)
+
+	if code, out := run("strategy", "log-usage", "-identity="+identity, "-harness=claude-code", "-tokens=42000", "-cost=1.23", stratID); code != 0 {
+		t.Fatalf("strategy log-usage (claude-code): exit %d: %s", code, out)
+	}
+	if code, out := run("strategy", "log-usage", "-identity="+identity, "-harness=claude-code", "-tokens=8000", stratID); code != 0 {
+		t.Fatalf("strategy log-usage (claude-code, 2nd): exit %d: %s", code, out)
+	}
+	if code, out := run("strategy", "log-usage", "-identity="+identity, "-harness=codex", "-tokens=5000", "-cost=0.10", stratID); code != 0 {
+		t.Fatalf("strategy log-usage (codex): exit %d: %s", code, out)
+	}
+
+	// Reject a missing required flag cleanly, rather than silently
+	// accepting a partial log-usage call.
+	if code, out := run("strategy", "log-usage", "-identity="+identity, "-tokens=100", stratID); code == 0 {
+		t.Fatalf("strategy log-usage without -harness should fail, got exit 0: %s", out)
+	}
+
+	usageCode, usageOut := run("strategy", "usage", stratID)
+	if usageCode != 0 {
+		t.Fatalf("strategy usage: exit %d: %s", usageCode, usageOut)
+	}
+	if !strings.Contains(usageOut, "claude-code") || !strings.Contains(usageOut, "tokens=50000") || !strings.Contains(usageOut, "cost=1.23") {
+		t.Fatalf("strategy usage: want claude-code totals (tokens=50000, cost=1.23), got:\n%s", usageOut)
+	}
+	if !strings.Contains(usageOut, "codex") || !strings.Contains(usageOut, "tokens=5000") || !strings.Contains(usageOut, "cost=0.10") {
+		t.Fatalf("strategy usage: want codex totals (tokens=5000, cost=0.10), got:\n%s", usageOut)
+	}
+	if !strings.Contains(usageOut, "harness=claude-code tokens=42000 cost=1.23") {
+		t.Fatalf("strategy usage: want the raw per-event line for the first log-usage call, got:\n%s", usageOut)
+	}
+}
+
 // TestStrategyNextRecapsRecentEventsAndSystemWideLocks is the CLI-level
 // proof for `strategy next`: run through the real compiled binary, it
 // must (1) print the strategy's current status and thesis, (2) recap
