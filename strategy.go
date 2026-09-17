@@ -5,6 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -291,11 +294,79 @@ func (s *Store) RecentStrategyEvents(strategyID string) ([]*StrategyEvent, error
 	return recent, nil
 }
 
+// resourceUsageNote formats a resource_usage event's note as a
+// deterministic, parseable "key=value" line instead of freeform prose:
+// "harness=<harness> tokens=<n>", with " cost=<c>" appended only when
+// hasCost is true. This is the one format log-usage writes and
+// parseResourceUsageNote reads back — the actual point of log-usage over
+// plain `strategy log`, since numbers logged today only stay comparable
+// once every writer agrees on a shape.
+func resourceUsageNote(harness string, tokens int64, cost float64, hasCost bool) string {
+	note := fmt.Sprintf("harness=%s tokens=%d", harness, tokens)
+	if hasCost {
+		note += " cost=" + strconv.FormatFloat(cost, 'f', -1, 64)
+	}
+	return note
+}
+
+// parsedResourceUsage is one resource_usage event's note, decoded back out
+// by parseResourceUsageNote.
+type parsedResourceUsage struct {
+	Harness string
+	Tokens  int64
+	Cost    float64
+	HasCost bool
+}
+
+// parseResourceUsageNote decodes the format resourceUsageNote writes.
+// Errors on anything that doesn't match — a hand-edited note, or one
+// written by the older freeform `strategy log -kind=resource_usage`
+// before this format existed — rather than guessing at a partial parse;
+// callers (strategy usage) are expected to skip-and-report on error, not
+// crash, matching faculty list's handling of an unparseable file.
+func parseResourceUsageNote(note string) (parsedResourceUsage, error) {
+	var p parsedResourceUsage
+	seen := map[string]bool{}
+	for _, field := range strings.Fields(note) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			return p, fmt.Errorf("malformed field %q (want key=value)", field)
+		}
+		switch key {
+		case "harness":
+			p.Harness = value
+		case "tokens":
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || n < 0 {
+				return p, fmt.Errorf("invalid tokens value %q (want a non-negative integer)", value)
+			}
+			p.Tokens = n
+		case "cost":
+			c, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return p, fmt.Errorf("invalid cost value %q", value)
+			}
+			p.Cost = c
+			p.HasCost = true
+		default:
+			return p, fmt.Errorf("unknown field %q", key)
+		}
+		seen[key] = true
+	}
+	if !seen["harness"] || p.Harness == "" {
+		return p, fmt.Errorf("missing harness field")
+	}
+	if !seen["tokens"] {
+		return p, fmt.Errorf("missing tokens field")
+	}
+	return p, nil
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────
 
 func cmdStrategy(args []string) int {
 	if len(args) == 0 {
-		fmt.Println("usage: stratagema strategy <create|list|show|log|activate|observe|close|next> [flags]")
+		fmt.Println("usage: stratagema strategy <create|list|show|log|log-usage|usage|activate|observe|close|next> [flags]")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
@@ -308,6 +379,10 @@ func cmdStrategy(args []string) int {
 		return cmdStrategyShow(rest)
 	case "log":
 		return cmdStrategyLog(rest)
+	case "log-usage":
+		return cmdStrategyLogUsage(rest)
+	case "usage":
+		return cmdStrategyUsage(rest)
 	case "activate":
 		return cmdStrategySetStatus(rest, StrategyActive)
 	case "observe":
@@ -317,7 +392,7 @@ func cmdStrategy(args []string) int {
 	case "next":
 		return cmdStrategyNext(rest)
 	default:
-		return die(2, "strategy: unknown subcommand %q (create|list|show|log|activate|observe|close|next)", sub)
+		return die(2, "strategy: unknown subcommand %q (create|list|show|log|log-usage|usage|activate|observe|close|next)", sub)
 	}
 }
 
@@ -442,6 +517,131 @@ func cmdStrategyLog(args []string) int {
 	}
 	fmt.Printf("logged %s\n  strategy: %s\n  kind:     %s\n", ev.ID, ev.StrategyID, ev.Kind)
 	return 0
+}
+
+// cmdStrategyLogUsage is the structured alternative to `strategy log
+// -kind=resource_usage -note="..."`: same event kind under the hood, but
+// the note is always written in resourceUsageNote's fixed shape instead of
+// whatever prose a caller typed, so numbers logged by different callers
+// stay comparable.
+//
+// -tokens has no zero value that also means "unset" (0 tokens is a real,
+// loggable amount), so it defaults to -1 and any negative value —
+// unset or a real mistake — is rejected the same way.
+func cmdStrategyLogUsage(args []string) int {
+	fs := flag.NewFlagSet("strategy log-usage", flag.ExitOnError)
+	dbFlag := dbPathFlag(fs)
+	identity := fs.String("identity", "", "identity ID logging this usage (required)")
+	harness := fs.String("harness", "", "agent harness that did the work, e.g. claude-code (required)")
+	tokens := fs.Int64("tokens", -1, "tokens used, non-negative integer (required)")
+	cost := fs.Float64("cost", 0, "USD cost (optional, omitted from the note if zero/unset)")
+	fs.Parse(args)
+
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return die(1, "strategy log-usage: strategy id required")
+	}
+	if *identity == "" || *harness == "" {
+		return die(1, "strategy log-usage: -identity and -harness are required")
+	}
+	if *tokens < 0 {
+		return die(1, "strategy log-usage: -tokens is required and must be non-negative")
+	}
+	store, err := openStore(*dbFlag)
+	if err != nil {
+		return die(1, "strategy log-usage: %v", err)
+	}
+	defer store.Close()
+
+	note := resourceUsageNote(*harness, *tokens, *cost, *cost != 0)
+	ev, err := store.LogStrategyEvent(rest[0], *identity, "resource_usage", note)
+	if err != nil {
+		return die(1, "strategy log-usage: %v", err)
+	}
+	fmt.Printf("logged %s\n  strategy: %s\n  %s\n", ev.ID, ev.StrategyID, ev.Note)
+	return 0
+}
+
+// cmdStrategyUsage lists a strategy's resource_usage events and prints a
+// per-harness total (tokens, and cost if any were logged), alongside the
+// raw per-event lines. A note that doesn't parse — hand-edited, or logged
+// through the older freeform `strategy log` before log-usage existed — is
+// shown raw and excluded from totals, with a stated reason, rather than
+// crashing or silently dropping it (same "report the problem, don't hide
+// or crash on it" style as faculty list's handling of a bad file).
+func cmdStrategyUsage(args []string) int {
+	fs := flag.NewFlagSet("strategy usage", flag.ExitOnError)
+	dbFlag := dbPathFlag(fs)
+	fs.Parse(args)
+
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return die(1, "strategy usage: strategy id required")
+	}
+	store, err := openStore(*dbFlag)
+	if err != nil {
+		return die(1, "strategy usage: %v", err)
+	}
+	defer store.Close()
+
+	events, err := store.ListStrategyEvents(rest[0])
+	if err != nil {
+		return die(1, "strategy usage: %v", err)
+	}
+
+	type totals struct {
+		tokens  int64
+		cost    float64
+		hasCost bool
+	}
+	byHarness := map[string]*totals{}
+	var harnessOrder []string
+	var rawLines []string
+	exit := 0
+	for _, ev := range events {
+		if ev.Kind != "resource_usage" {
+			continue
+		}
+		rawLines = append(rawLines, fmt.Sprintf("    %s  %-15s  by=%s  %s", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.IdentityID, ev.Note))
+
+		p, err := parseResourceUsageNote(ev.Note)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "stratagema: strategy usage: skipping %s from totals: %v\n", ev.ID, err)
+			exit = 1
+			continue
+		}
+		t, ok := byHarness[p.Harness]
+		if !ok {
+			t = &totals{}
+			byHarness[p.Harness] = t
+			harnessOrder = append(harnessOrder, p.Harness)
+		}
+		t.tokens += p.Tokens
+		if p.HasCost {
+			t.cost += p.Cost
+			t.hasCost = true
+		}
+	}
+
+	if len(rawLines) == 0 {
+		fmt.Println("no resource_usage events logged")
+		return exit
+	}
+
+	fmt.Println("totals by harness:")
+	for _, h := range harnessOrder {
+		t := byHarness[h]
+		if t.hasCost {
+			fmt.Printf("  %-16s  tokens=%d  cost=%s\n", h, t.tokens, strconv.FormatFloat(t.cost, 'f', 2, 64))
+		} else {
+			fmt.Printf("  %-16s  tokens=%d\n", h, t.tokens)
+		}
+	}
+	fmt.Println("events:")
+	for _, l := range rawLines {
+		fmt.Println(l)
+	}
+	return exit
 }
 
 // cmdStrategySetStatus reuses one function for both activate and
