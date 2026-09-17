@@ -27,12 +27,20 @@ var validStrategyStatuses = map[string]bool{
 
 // validStrategyEventKinds is checked the same way, at strategy log's one
 // write path — an unknown kind is rejected before it's ever appended.
+//
+// resource_usage is schema-only for now: a place to log real spend
+// (tokens, dollars, wall time) against a strategy once a harness reports
+// it, logged by hand until real per-invocation reporting exists. It
+// carries no enforcement — a strategy that overspends isn't blocked,
+// just recorded, matching the soft-reporting-first lean this project
+// settled on before building any budget enforcement.
 var validStrategyEventKinds = map[string]bool{
 	"step_started":   true,
 	"step_completed": true,
 	"finding":        true,
 	"decision":       true,
 	"reflection":     true,
+	"resource_usage": true,
 }
 
 // Strategy is the durable header for one line of work multiple agents
@@ -58,7 +66,7 @@ type Strategy struct {
 type StrategyEvent struct {
 	ID         string
 	StrategyID string
-	Kind       string // step_started | step_completed | finding | decision | reflection
+	Kind       string // step_started | step_completed | finding | decision | reflection | resource_usage
 	IdentityID string
 	Note       string
 	Ts         time.Time
@@ -168,7 +176,7 @@ func (s *Store) CloseStrategy(id, identityID, outcome string) error {
 // was never created.
 func (s *Store) LogStrategyEvent(strategyID, identityID, kind, note string) (*StrategyEvent, error) {
 	if !validStrategyEventKinds[kind] {
-		return nil, fmt.Errorf("strategy log: unknown kind %q (want step_started|step_completed|finding|decision|reflection)", kind)
+		return nil, fmt.Errorf("strategy log: unknown kind %q (want step_started|step_completed|finding|decision|reflection|resource_usage)", kind)
 	}
 	existing, err := s.GetStrategy(strategyID)
 	if err != nil {
@@ -248,8 +256,9 @@ const recentEventsCap = 10
 //
 // Why step_completed as the cutoff: it's the one event kind an agent
 // chooses to write specifically to mean "one self-contained unit of
-// work here is actually done" — step_started, finding, decision, and
-// reflection are all things that happen *during* a unit of work,
+// work here is actually done" — step_started, finding, decision,
+// resource_usage, and reflection are all things that happen *during* a
+// unit of work,
 // step_completed is the marker that a unit of work ended. That makes it
 // the natural boundary between "already settled, a resuming agent
 // doesn't need to re-derive it" and "happened since, still live
@@ -410,7 +419,7 @@ func cmdStrategyLog(args []string) int {
 	fs := flag.NewFlagSet("strategy log", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
 	identity := fs.String("identity", "", "identity ID logging this event (required)")
-	kind := fs.String("kind", "", "step_started|step_completed|finding|decision|reflection (required)")
+	kind := fs.String("kind", "", "step_started|step_completed|finding|decision|reflection|resource_usage (required)")
 	note := fs.String("note", "", "what happened (required)")
 	fs.Parse(args)
 

@@ -152,6 +152,37 @@ func TestLogStrategyEventRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+// TestLogStrategyEventAcceptsResourceUsage confirms resource_usage logs
+// and reads back like any other event kind — schema-only support, no
+// enforcement, matching the soft-reporting-first design.
+func TestLogStrategyEventAcceptsResourceUsage(t *testing.T) {
+	s := newTestStore(t)
+	alpha, err := s.CreateIdentity("agent-alpha")
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	st, err := s.CreateStrategy("probe", "thesis")
+	if err != nil {
+		t.Fatalf("CreateStrategy: %v", err)
+	}
+
+	ev, err := s.LogStrategyEvent(st.ID, alpha.ID, "resource_usage", "42000 tokens, claude-code")
+	if err != nil {
+		t.Fatalf("LogStrategyEvent(resource_usage): %v", err)
+	}
+	if ev.Kind != "resource_usage" {
+		t.Fatalf("Kind = %q, want %q", ev.Kind, "resource_usage")
+	}
+
+	events, err := s.ListStrategyEvents(st.ID)
+	if err != nil {
+		t.Fatalf("ListStrategyEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != "resource_usage" || events[0].Note != "42000 tokens, claude-code" {
+		t.Fatalf("ListStrategyEvents: got %+v, want one resource_usage event", events)
+	}
+}
+
 // TestUnknownStrategyIDErrorsCleanly runs every strategy-id-taking method
 // against an id that was never created and asserts each one errors
 // cleanly rather than silently no-op'ing or panicking.
