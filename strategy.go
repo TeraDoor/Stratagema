@@ -56,6 +56,7 @@ type Strategy struct {
 	Status    string
 	CreatedAt time.Time
 	ClosedAt  *time.Time
+	Group     string // optional: several strategies belonging to one larger effort, "" if unset
 }
 
 // StrategyEvent is one append-only entry in a strategy's log — a finding,
@@ -91,7 +92,7 @@ func (s *Store) CreateStrategy(name, thesis string) (*Strategy, error) {
 // pattern as GetLock, not an error, since "does this strategy exist" is
 // a normal question to ask, not a failure.
 func (s *Store) GetStrategy(id string) (*Strategy, error) {
-	row := s.db.QueryRow(`SELECT id, name, thesis, status, created_at, closed_at FROM strategies WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT id, name, thesis, status, created_at, closed_at, group_name FROM strategies WHERE id = ?`, id)
 	st, err := scanStrategy(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -100,7 +101,7 @@ func (s *Store) GetStrategy(id string) (*Strategy, error) {
 }
 
 func (s *Store) ListStrategies() ([]*Strategy, error) {
-	rows, err := s.db.Query(`SELECT id, name, thesis, status, created_at, closed_at FROM strategies ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, name, thesis, status, created_at, closed_at, group_name FROM strategies ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -120,13 +121,17 @@ func scanStrategy(sc rowScanner) (*Strategy, error) {
 	var st Strategy
 	var createdAt int64
 	var closedAt sql.NullInt64
-	if err := sc.Scan(&st.ID, &st.Name, &st.Thesis, &st.Status, &createdAt, &closedAt); err != nil {
+	var group sql.NullString
+	if err := sc.Scan(&st.ID, &st.Name, &st.Thesis, &st.Status, &createdAt, &closedAt, &group); err != nil {
 		return nil, err
 	}
 	st.CreatedAt = time.UnixMilli(createdAt)
 	if closedAt.Valid {
 		t := time.UnixMilli(closedAt.Int64)
 		st.ClosedAt = &t
+	}
+	if group.Valid {
+		st.Group = group.String
 	}
 	return &st, nil
 }
@@ -142,6 +147,24 @@ func (s *Store) SetStrategyStatus(id, status string) error {
 		return fmt.Errorf("strategy: unknown status %q (want planning|active|observing|closed)", status)
 	}
 	res, err := s.exec(`UPDATE strategies SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("strategy %s not found", id)
+	}
+	return nil
+}
+
+// SetStrategyGroup sets id's optional group label, erroring if id doesn't
+// exist (same not-found pattern as SetStrategyStatus). Deliberately a
+// separate call rather than a CreateStrategy parameter -- see
+// cmdStrategyCreate, which calls this right after CreateStrategy when
+// -group is given, so CreateStrategy's existing signature (and its many
+// call sites) never has to change.
+func (s *Store) SetStrategyGroup(id, group string) error {
+	res, err := s.exec(`UPDATE strategies SET group_name = ? WHERE id = ?`, group, id)
 	if err != nil {
 		return err
 	}
@@ -326,6 +349,7 @@ func cmdStrategyCreate(args []string) int {
 	dbFlag := dbPathFlag(fs)
 	name := fs.String("name", "", "short name for the strategy (required)")
 	thesis := fs.String("thesis", "", "what this strategy is trying to prove or achieve (required)")
+	group := fs.String("group", "", "optional label grouping this strategy with others in the same larger effort")
 	fs.Parse(args)
 
 	if *name == "" || *thesis == "" {
@@ -341,13 +365,34 @@ func cmdStrategyCreate(args []string) int {
 	if err != nil {
 		return die(1, "strategy create: %v", err)
 	}
+	if *group != "" {
+		// A second call rather than a CreateStrategy parameter -- see
+		// SetStrategyGroup's doc comment for why: it keeps CreateStrategy's
+		// signature (and every existing call site) untouched at the cost of
+		// this one extra write, which is fine at strategy-creation volume.
+		if err := store.SetStrategyGroup(st.ID, *group); err != nil {
+			return die(1, "strategy create: %v", err)
+		}
+		st.Group = *group
+	}
 	fmt.Printf("created %s\n  name:   %s\n  thesis: %s\n", st.ID, st.Name, st.Thesis)
 	return 0
+}
+
+// displayGroup renders a strategy's optional group label the same way
+// faculty list renders its own optional core field: the value if set, "-"
+// if not -- one shared convention for "this optional field wasn't given."
+func displayGroup(group string) string {
+	if group == "" {
+		return "-"
+	}
+	return group
 }
 
 func cmdStrategyList(args []string) int {
 	fs := flag.NewFlagSet("strategy list", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
+	group := fs.String("group", "", "only list strategies with this exact group label (optional)")
 	fs.Parse(args)
 
 	store, err := openStore(*dbFlag)
@@ -360,12 +405,24 @@ func cmdStrategyList(args []string) int {
 	if err != nil {
 		return die(1, "strategy list: %v", err)
 	}
+	// Filtered client-side, not a dedicated SQL query -- strategy counts
+	// here are small enough that this doesn't need to be a database-level
+	// filter to be correct.
+	if *group != "" {
+		var filtered []*Strategy
+		for _, st := range strategies {
+			if st.Group == *group {
+				filtered = append(filtered, st)
+			}
+		}
+		strategies = filtered
+	}
 	if len(strategies) == 0 {
 		fmt.Println("no strategies")
 		return 0
 	}
 	for _, st := range strategies {
-		fmt.Printf("%-22s  %-10s  %-9s  created=%s\n", st.ID, st.Name, st.Status, st.CreatedAt.UTC().Format(time.RFC3339))
+		fmt.Printf("%-22s  %-10s  %-9s  group=%-10s  created=%s\n", st.ID, st.Name, st.Status, displayGroup(st.Group), st.CreatedAt.UTC().Format(time.RFC3339))
 	}
 	return 0
 }
@@ -395,6 +452,7 @@ func cmdStrategyShow(args []string) int {
 	fmt.Printf("%s  %s\n", st.ID, st.Name)
 	fmt.Printf("  status:  %s\n", st.Status)
 	fmt.Printf("  thesis:  %s\n", st.Thesis)
+	fmt.Printf("  group:   %s\n", displayGroup(st.Group))
 	fmt.Printf("  created: %s\n", st.CreatedAt.UTC().Format(time.RFC3339))
 	if st.ClosedAt != nil {
 		fmt.Printf("  closed:  %s\n", st.ClosedAt.UTC().Format(time.RFC3339))

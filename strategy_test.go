@@ -391,6 +391,77 @@ func TestRecentStrategyEventsCapsEvenWithoutStepCompleted(t *testing.T) {
 // behind, not just a status flip with no trace: CloseStrategy must set
 // status=closed, stamp closed_at, and append a reflection event carrying
 // the outcome note.
+// TestCreateStrategyLeavesGroupUnset proves a strategy created without a
+// group (the common path, and the only path before this feature existed)
+// round-trips with an empty Group -- CreateStrategy's signature was
+// deliberately left untouched, so this is the default every existing
+// call site still gets.
+func TestCreateStrategyLeavesGroupUnset(t *testing.T) {
+	s := newTestStore(t)
+	st, err := s.CreateStrategy("ungrouped", "thesis")
+	if err != nil {
+		t.Fatalf("CreateStrategy: %v", err)
+	}
+	if st.Group != "" {
+		t.Fatalf("CreateStrategy: want empty Group by default, got %q", st.Group)
+	}
+	got, err := s.GetStrategy(st.ID)
+	if err != nil {
+		t.Fatalf("GetStrategy: %v", err)
+	}
+	if got.Group != "" {
+		t.Fatalf("GetStrategy: want empty Group by default, got %q", got.Group)
+	}
+}
+
+// TestSetStrategyGroupRoundTrips proves SetStrategyGroup actually
+// persists: GetStrategy and ListStrategies must both reflect the group
+// after it's set, not just the in-process return value.
+func TestSetStrategyGroupRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	st, err := s.CreateStrategy("grouped", "thesis")
+	if err != nil {
+		t.Fatalf("CreateStrategy: %v", err)
+	}
+	if err := s.SetStrategyGroup(st.ID, "q3-initiative"); err != nil {
+		t.Fatalf("SetStrategyGroup: %v", err)
+	}
+
+	got, err := s.GetStrategy(st.ID)
+	if err != nil {
+		t.Fatalf("GetStrategy: %v", err)
+	}
+	if got.Group != "q3-initiative" {
+		t.Fatalf("GetStrategy: want Group %q, got %q", "q3-initiative", got.Group)
+	}
+
+	all, err := s.ListStrategies()
+	if err != nil {
+		t.Fatalf("ListStrategies: %v", err)
+	}
+	var found bool
+	for _, l := range all {
+		if l.ID == st.ID {
+			found = true
+			if l.Group != "q3-initiative" {
+				t.Fatalf("ListStrategies: want Group %q, got %q", "q3-initiative", l.Group)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListStrategies: strategy %s missing from list", st.ID)
+	}
+}
+
+// TestSetStrategyGroupUnknownIDErrors matches the same not-found pattern
+// as SetStrategyStatus -- an unknown id must error, not silently no-op.
+func TestSetStrategyGroupUnknownIDErrors(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetStrategyGroup("strategy-does-not-exist", "some-group"); err == nil {
+		t.Fatal("SetStrategyGroup: want an error for an unknown strategy id")
+	}
+}
+
 func TestCloseStrategyRecordsOutcomeAndTimestamp(t *testing.T) {
 	s := newTestStore(t)
 	alpha, err := s.CreateIdentity("agent-alpha")

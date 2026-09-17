@@ -106,6 +106,116 @@ func TestStrategyLogTwiceThenShowPrintsInOrder(t *testing.T) {
 	}
 }
 
+// TestStrategyGroupCreateListFilterShow is the CLI-level proof for the
+// optional group field: a strategy created with -group=<x> and a second
+// with a different group both round-trip through `strategy show`
+// (including a plain "-" for a strategy created without -group at all),
+// and `strategy list -group=<x>` returns only the matching strategy while
+// `strategy list` with no filter still returns every strategy created.
+func TestStrategyGroupCreateListFilterShow(t *testing.T) {
+	bin := buildBinary(t)
+	db := filepath.Join(t.TempDir(), "strategy-group.db")
+
+	run := func(cmd, sub string, rest ...string) (int, string) {
+		var flags, positional []string
+		for _, a := range rest {
+			if strings.HasPrefix(a, "-") {
+				flags = append(flags, a)
+			} else {
+				positional = append(positional, a)
+			}
+		}
+		full := append([]string{cmd, sub, "-db=" + db}, flags...)
+		full = append(full, positional...)
+		out, err := exec.Command(bin, full...).CombinedOutput()
+		switch e := err.(type) {
+		case nil:
+			return 0, string(out)
+		case *exec.ExitError:
+			return e.ExitCode(), string(out)
+		default:
+			t.Fatalf("unexpected error running binary: %v", err)
+			return -1, ""
+		}
+	}
+
+	groupedCode, groupedOut := run("strategy", "create", "-name=grouped-a", "-thesis=part of the q3 initiative", "-group=q3-initiative")
+	if groupedCode != 0 {
+		t.Fatalf("strategy create (grouped-a) failed (exit %d): %s", groupedCode, groupedOut)
+	}
+	groupedID := extractID(t, groupedCode, groupedOut)
+
+	groupedCode2, groupedOut2 := run("strategy", "create", "-name=grouped-b", "-thesis=also part of the q3 initiative", "-group=q3-initiative")
+	if groupedCode2 != 0 {
+		t.Fatalf("strategy create (grouped-b) failed (exit %d): %s", groupedCode2, groupedOut2)
+	}
+	groupedID2 := extractID(t, groupedCode2, groupedOut2)
+
+	ungroupedCode, ungroupedOut := run("strategy", "create", "-name=ungrouped", "-thesis=not part of any named effort")
+	if ungroupedCode != 0 {
+		t.Fatalf("strategy create (ungrouped) failed (exit %d): %s", ungroupedCode, ungroupedOut)
+	}
+	ungroupedID := extractID(t, ungroupedCode, ungroupedOut)
+
+	// strategy show reflects the group for a grouped strategy...
+	showCode, showOut := run("strategy", "show", groupedID)
+	if showCode != 0 {
+		t.Fatalf("strategy show (grouped-a) failed (exit %d): %s", showCode, showOut)
+	}
+	if !strings.Contains(showOut, "group:   q3-initiative") {
+		t.Fatalf("strategy show should display the group, got:\n%s", showOut)
+	}
+
+	// ...and "-" for one created without -group at all.
+	showCode2, showOut2 := run("strategy", "show", ungroupedID)
+	if showCode2 != 0 {
+		t.Fatalf("strategy show (ungrouped) failed (exit %d): %s", showCode2, showOut2)
+	}
+	if !strings.Contains(showOut2, "group:   -") {
+		t.Fatalf("strategy show should display \"-\" for an unset group, got:\n%s", showOut2)
+	}
+
+	// strategy list -group=q3-initiative returns only the two matching
+	// strategies, not the ungrouped one.
+	filteredCode, filteredOut := run("strategy", "list", "-group=q3-initiative")
+	if filteredCode != 0 {
+		t.Fatalf("strategy list -group failed (exit %d): %s", filteredCode, filteredOut)
+	}
+	if !strings.Contains(filteredOut, groupedID) || !strings.Contains(filteredOut, groupedID2) {
+		t.Fatalf("strategy list -group=q3-initiative should include both grouped strategies, got:\n%s", filteredOut)
+	}
+	if strings.Contains(filteredOut, ungroupedID) {
+		t.Fatalf("strategy list -group=q3-initiative should NOT include the ungrouped strategy, got:\n%s", filteredOut)
+	}
+
+	// strategy list with no filter still returns all three.
+	allCode, allOut := run("strategy", "list")
+	if allCode != 0 {
+		t.Fatalf("strategy list failed (exit %d): %s", allCode, allOut)
+	}
+	for _, id := range []string{groupedID, groupedID2, ungroupedID} {
+		if !strings.Contains(allOut, id) {
+			t.Fatalf("strategy list (no filter) should include strategy %s, got:\n%s", id, allOut)
+		}
+	}
+	if !strings.Contains(allOut, "group=q3-initiative") {
+		t.Fatalf("strategy list should display the group column for grouped strategies, got:\n%s", allOut)
+	}
+	if !strings.Contains(allOut, "group=-") {
+		t.Fatalf("strategy list should display \"-\" for the ungrouped strategy, got:\n%s", allOut)
+	}
+
+	// A -group filter matching nothing yields the same "no strategies"
+	// message as an empty database, not an error.
+	emptyCode, emptyOut := run("strategy", "list", "-group=no-such-group")
+	if emptyCode != 0 {
+		t.Fatalf("strategy list -group=no-such-group failed (exit %d): %s", emptyCode, emptyOut)
+	}
+	if !strings.Contains(emptyOut, "no strategies") {
+		t.Fatalf("strategy list -group=no-such-group should report no strategies, got:\n%s", emptyOut)
+	}
+}
+
 // TestStrategyNextRecapsRecentEventsAndSystemWideLocks is the CLI-level
 // proof for `strategy next`: run through the real compiled binary, it
 // must (1) print the strategy's current status and thesis, (2) recap
