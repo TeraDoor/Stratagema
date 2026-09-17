@@ -34,13 +34,25 @@ var validStrategyStatuses = map[string]bool{
 // carries no enforcement — a strategy that overspends isn't blocked,
 // just recorded, matching the soft-reporting-first lean this project
 // settled on before building any budget enforcement.
+//
+// external_signal is schema-only in the same sense, for a different gap:
+// this project has never had a real external user or consumer see or
+// react to anything it built. Logging an external_signal event does not
+// close that gap and does not itself mean it happened — it exists so
+// that the day a real external reaction occurs (an actual user's
+// comment, a real usage metric from something actually shipped, a real
+// piece of feedback from outside this project), there's a structured
+// place to record it instead of reaching for a freeform finding event.
+// An empty strategy log with no external_signal events is the honest
+// state of things right now, not a bug.
 var validStrategyEventKinds = map[string]bool{
-	"step_started":   true,
-	"step_completed": true,
-	"finding":        true,
-	"decision":       true,
-	"reflection":     true,
-	"resource_usage": true,
+	"step_started":    true,
+	"step_completed":  true,
+	"finding":         true,
+	"decision":        true,
+	"reflection":      true,
+	"resource_usage":  true,
+	"external_signal": true,
 }
 
 // Strategy is the durable header for one line of work multiple agents
@@ -66,7 +78,7 @@ type Strategy struct {
 type StrategyEvent struct {
 	ID         string
 	StrategyID string
-	Kind       string // step_started | step_completed | finding | decision | reflection | resource_usage
+	Kind       string // step_started | step_completed | finding | decision | reflection | resource_usage | external_signal
 	IdentityID string
 	Note       string
 	Ts         time.Time
@@ -176,7 +188,7 @@ func (s *Store) CloseStrategy(id, identityID, outcome string) error {
 // was never created.
 func (s *Store) LogStrategyEvent(strategyID, identityID, kind, note string) (*StrategyEvent, error) {
 	if !validStrategyEventKinds[kind] {
-		return nil, fmt.Errorf("strategy log: unknown kind %q (want step_started|step_completed|finding|decision|reflection|resource_usage)", kind)
+		return nil, fmt.Errorf("strategy log: unknown kind %q (want step_started|step_completed|finding|decision|reflection|resource_usage|external_signal)", kind)
 	}
 	existing, err := s.GetStrategy(strategyID)
 	if err != nil {
@@ -257,8 +269,8 @@ const recentEventsCap = 10
 // Why step_completed as the cutoff: it's the one event kind an agent
 // chooses to write specifically to mean "one self-contained unit of
 // work here is actually done" — step_started, finding, decision,
-// resource_usage, and reflection are all things that happen *during* a
-// unit of work,
+// resource_usage, external_signal, and reflection are all things that
+// happen *during* a unit of work,
 // step_completed is the marker that a unit of work ended. That makes it
 // the natural boundary between "already settled, a resuming agent
 // doesn't need to re-derive it" and "happened since, still live
@@ -419,7 +431,7 @@ func cmdStrategyLog(args []string) int {
 	fs := flag.NewFlagSet("strategy log", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
 	identity := fs.String("identity", "", "identity ID logging this event (required)")
-	kind := fs.String("kind", "", "step_started|step_completed|finding|decision|reflection|resource_usage (required)")
+	kind := fs.String("kind", "", "step_started|step_completed|finding|decision|reflection|resource_usage|external_signal (required)")
 	note := fs.String("note", "", "what happened (required)")
 	fs.Parse(args)
 
