@@ -769,10 +769,10 @@ func cmdStrategyClose(args []string) int {
 // cmdStrategyNext prints a concise, structured recap for an agent (or
 // human) resuming work on a strategy: its current status and thesis, the
 // recent slice of its event log (see RecentStrategyEvents for the
-// cutoff), and every lock currently held system-wide as a "here's what's
-// contested right now" courtesy — strategies and locks aren't formally
-// linked in the schema, so this is every held lock, not just ones this
-// strategy is presumed to care about.
+// cutoff), and the locks currently held system-wide, split into what's
+// actually linked to this strategy (via AcquireLock's -strategy flag) and
+// everything else — a real link now, not just an informational dump of
+// every held lock.
 //
 // Deliberately does not decide anything: no "recommended next step," no
 // scoring, no filtering by relevance, no call to any LLM or external
@@ -838,12 +838,34 @@ func cmdStrategyNext(args []string) int {
 	if err != nil {
 		return die(1, "strategy next: %v", err)
 	}
-	if len(locks) == 0 {
-		fmt.Println("  locks held system-wide: none")
+	var linked, other []*Lock
+	for _, l := range locks {
+		if l.StrategyID == st.ID {
+			linked = append(linked, l)
+		} else {
+			other = append(other, l)
+		}
+	}
+	if len(linked) == 0 {
+		fmt.Println("  locks linked to this strategy: none")
 	} else {
-		fmt.Println("  locks held system-wide (informational only — not linked to this strategy):")
-		for _, l := range locks {
+		fmt.Printf("  locks linked to this strategy (%d):\n", len(linked))
+		for _, l := range linked {
 			fmt.Printf("    %-24s  holder=%-20s  since=%s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339))
+		}
+	}
+
+	fmt.Println()
+	if len(other) == 0 {
+		fmt.Println("  other locks held system-wide: none")
+	} else {
+		fmt.Printf("  other locks held system-wide (%d, not linked to this strategy):\n", len(other))
+		for _, l := range other {
+			otherStrategy := "unlinked"
+			if l.StrategyID != "" {
+				otherStrategy = "strategy=" + l.StrategyID
+			}
+			fmt.Printf("    %-24s  holder=%-20s  since=%s  %s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339), otherStrategy)
 		}
 	}
 	return 0

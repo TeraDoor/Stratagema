@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS locks (
 	resource           TEXT PRIMARY KEY,
 	holder_identity_id TEXT NOT NULL,
 	note               TEXT,
-	acquired_at        INTEGER NOT NULL
+	acquired_at        INTEGER NOT NULL,
+	strategy_id        TEXT -- optional link to strategies.id; empty/NULL = unlinked
 );
 
 CREATE TABLE IF NOT EXISTS lock_events (
@@ -108,7 +109,8 @@ CREATE TABLE IF NOT EXISTS lock_events (
 	holder_identity_id TEXT,          -- denied: who currently holds it; released: who held it
 	note               TEXT,
 	forced             INTEGER NOT NULL DEFAULT 0,
-	ts                 INTEGER NOT NULL
+	ts                 INTEGER NOT NULL,
+	strategy_id        TEXT -- optional link to strategies.id, copied from the lock row at event time
 );
 
 CREATE TABLE IF NOT EXISTS interests (

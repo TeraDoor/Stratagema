@@ -30,6 +30,7 @@ type Lock struct {
 	HolderID   string
 	Note       string
 	AcquiredAt time.Time
+	StrategyID string // empty = not linked to any strategy
 }
 
 // LockEvent is the durable record of every acquire attempt, denial, and
@@ -47,16 +48,17 @@ type LockEvent struct {
 	Note       string
 	Forced     bool
 	Ts         time.Time
+	StrategyID string // empty = not linked to any strategy; copied from the lock row at event time
 }
 
 var ErrLockHeld = errors.New("resource is locked by another identity")
 
 func (s *Store) GetLock(resource string) (*Lock, error) {
-	row := s.db.QueryRow(`SELECT resource, holder_identity_id, note, acquired_at FROM locks WHERE resource = ?`, resource)
+	row := s.db.QueryRow(`SELECT resource, holder_identity_id, note, acquired_at, strategy_id FROM locks WHERE resource = ?`, resource)
 	var l Lock
-	var note sql.NullString
+	var note, strategyID sql.NullString
 	var acquiredAt int64
-	err := row.Scan(&l.Resource, &l.HolderID, &note, &acquiredAt)
+	err := row.Scan(&l.Resource, &l.HolderID, &note, &acquiredAt, &strategyID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -65,11 +67,12 @@ func (s *Store) GetLock(resource string) (*Lock, error) {
 	}
 	l.Note = note.String
 	l.AcquiredAt = time.UnixMilli(acquiredAt)
+	l.StrategyID = strategyID.String
 	return &l, nil
 }
 
 func (s *Store) ListLocks() ([]*Lock, error) {
-	rows, err := s.db.Query(`SELECT resource, holder_identity_id, note, acquired_at FROM locks ORDER BY acquired_at`)
+	rows, err := s.db.Query(`SELECT resource, holder_identity_id, note, acquired_at, strategy_id FROM locks ORDER BY acquired_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -77,19 +80,25 @@ func (s *Store) ListLocks() ([]*Lock, error) {
 	var out []*Lock
 	for rows.Next() {
 		var l Lock
-		var note sql.NullString
+		var note, strategyID sql.NullString
 		var acquiredAt int64
-		if err := rows.Scan(&l.Resource, &l.HolderID, &note, &acquiredAt); err != nil {
+		if err := rows.Scan(&l.Resource, &l.HolderID, &note, &acquiredAt, &strategyID); err != nil {
 			return nil, err
 		}
 		l.Note = note.String
 		l.AcquiredAt = time.UnixMilli(acquiredAt)
+		l.StrategyID = strategyID.String
 		out = append(out, &l)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note string, forced bool) (string, error) {
+// recordLockEvent's strategyID is the link to carry onto the event row, not
+// necessarily the one the caller just typed — AcquireLock passes its own
+// param for "acquired", but "denied" and "released" pass the *existing*
+// lock row's StrategyID, since those events describe the hold that was
+// already in place, not whatever the current caller asked for.
+func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note, strategyID string, forced bool) (string, error) {
 	id, err := newID("lockevt")
 	if err != nil {
 		return "", err
@@ -99,8 +108,8 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note strin
 		f = 1
 	}
 	_, err = s.exec(
-		`INSERT INTO lock_events (id, resource, kind, identity_id, holder_identity_id, note, forced, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, resource, kind, identityID, holderID, note, f, time.Now().UnixMilli(),
+		`INSERT INTO lock_events (id, resource, kind, identity_id, holder_identity_id, note, forced, ts, strategy_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, resource, kind, identityID, holderID, note, f, time.Now().UnixMilli(), strategyID,
 	)
 	return id, err
 }
@@ -112,10 +121,18 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note strin
 // and this project has no forever-running worker. An agent that wants to
 // wait polls or subscribes via `interest` instead.
 //
+// strategyID is optional (empty = unlinked) and, when non-empty, must name
+// a strategy that actually exists — checked up front so a typo'd id can
+// never land silently on a lock row, the same "reject, don't accept
+// garbage" posture GetStrategy's callers already follow elsewhere.
+//
 // Re-acquiring your own already-held lock is idempotent (refreshes the
 // note, keeps the original acquired_at) rather than an error — an agent
 // re-running a step against a resource it still holds is a normal case,
-// not a conflict.
+// not a conflict. The refresh also overwrites strategy_id unconditionally,
+// same as it already does for note: a re-acquire call states the current
+// truth, not a delta, so passing "" here deliberately unlinks rather than
+// leaving a stale link behind.
 //
 // The claim itself (the INSERT below) has to be a single atomic statement,
 // not a read-then-write: a real end-to-end test spawning genuinely
@@ -127,9 +144,18 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note strin
 // instead of a clean, recorded "denied" event. `INSERT ... ON CONFLICT DO
 // NOTHING` makes the claim itself race-free at the database engine level;
 // everything after it only runs once the true outcome is already known.
-func (s *Store) AcquireLock(resource, identityID, note string) (*Lock, error) {
+func (s *Store) AcquireLock(resource, identityID, note, strategyID string) (*Lock, error) {
 	if err := validResourceName(resource); err != nil {
 		return nil, err
+	}
+	if strategyID != "" {
+		st, err := s.GetStrategy(strategyID)
+		if err != nil {
+			return nil, err
+		}
+		if st == nil {
+			return nil, fmt.Errorf("lock acquire: strategy %s not found", strategyID)
+		}
 	}
 	now := time.Now().UnixMilli()
 
@@ -138,18 +164,18 @@ func (s *Store) AcquireLock(resource, identityID, note string) (*Lock, error) {
 	// GetLock that finds out why it failed — not a contention backoff.
 	for attempt := 0; attempt < 3; attempt++ {
 		res, err := s.exec(
-			`INSERT INTO locks (resource, holder_identity_id, note, acquired_at) VALUES (?, ?, ?, ?)
+			`INSERT INTO locks (resource, holder_identity_id, note, acquired_at, strategy_id) VALUES (?, ?, ?, ?, ?)
 			 ON CONFLICT(resource) DO NOTHING`,
-			resource, identityID, note, now,
+			resource, identityID, note, now, strategyID,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if n, _ := res.RowsAffected(); n == 1 {
-			if _, err := s.recordLockEvent(resource, "acquired", identityID, identityID, note, false); err != nil {
+			if _, err := s.recordLockEvent(resource, "acquired", identityID, identityID, note, strategyID, false); err != nil {
 				return nil, err
 			}
-			return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: time.UnixMilli(now)}, nil
+			return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: time.UnixMilli(now), StrategyID: strategyID}, nil
 		}
 
 		existing, err := s.GetLock(resource)
@@ -160,12 +186,12 @@ func (s *Store) AcquireLock(resource, identityID, note string) (*Lock, error) {
 			continue // freed between our failed insert and this read — retry the claim
 		}
 		if existing.HolderID == identityID {
-			if _, err := s.exec(`UPDATE locks SET note = ? WHERE resource = ?`, note, resource); err != nil {
+			if _, err := s.exec(`UPDATE locks SET note = ?, strategy_id = ? WHERE resource = ?`, note, strategyID, resource); err != nil {
 				return nil, err
 			}
-			return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: existing.AcquiredAt}, nil
+			return &Lock{Resource: resource, HolderID: identityID, Note: note, AcquiredAt: existing.AcquiredAt, StrategyID: strategyID}, nil
 		}
-		if _, err := s.recordLockEvent(resource, "denied", identityID, existing.HolderID, note, false); err != nil {
+		if _, err := s.recordLockEvent(resource, "denied", identityID, existing.HolderID, note, existing.StrategyID, false); err != nil {
 			return nil, err
 		}
 		if err := s.matchAndPropagate(resource); err != nil {
@@ -228,7 +254,7 @@ func (s *Store) ReleaseLock(resource, identityID, note string, force bool) error
 		return fmt.Errorf("resource %q is now held by %s, not %s (use -force to override)", resource, now.HolderID, identityID)
 	}
 
-	if _, err := s.recordLockEvent(resource, "released", identityID, existing.HolderID, note, existing.HolderID != identityID); err != nil {
+	if _, err := s.recordLockEvent(resource, "released", identityID, existing.HolderID, note, existing.StrategyID, existing.HolderID != identityID); err != nil {
 		return err
 	}
 	return s.matchAndPropagate(resource)
@@ -262,6 +288,7 @@ func cmdLockAcquire(args []string) int {
 	resource := fs.String("resource", "", "name of the shared resource to lock (required)")
 	identity := fs.String("identity", "", "identity ID acquiring the lock, from `identity create` (required)")
 	note := fs.String("note", "", "what you're about to do to it (shown to anyone denied, and to subscribers on release)")
+	strategy := fs.String("strategy", "", "strategy ID this acquire belongs to, from `strategy create` (optional — empty means unlinked)")
 	fs.Parse(args)
 
 	if *resource == "" || *identity == "" {
@@ -273,11 +300,14 @@ func cmdLockAcquire(args []string) int {
 	}
 	defer store.Close()
 
-	l, err := store.AcquireLock(*resource, *identity, *note)
+	l, err := store.AcquireLock(*resource, *identity, *note, *strategy)
 	if err != nil {
 		return die(1, "lock acquire: %v", err)
 	}
 	fmt.Printf("acquired %s\n  holder: %s\n  since:  %s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339))
+	if l.StrategyID != "" {
+		fmt.Printf("  strategy: %s\n", l.StrategyID)
+	}
 	return 0
 }
 
@@ -334,6 +364,9 @@ func cmdLockStatus(args []string) int {
 	if l.Note != "" {
 		fmt.Printf("  note: %s\n", l.Note)
 	}
+	if l.StrategyID != "" {
+		fmt.Printf("  strategy: %s\n", l.StrategyID)
+	}
 	return 0
 }
 
@@ -357,7 +390,11 @@ func cmdLockList(args []string) int {
 		return 0
 	}
 	for _, l := range locks {
-		fmt.Printf("%-24s  holder=%-20s  since=%s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339))
+		strategyField := "strategy=(unlinked)"
+		if l.StrategyID != "" {
+			strategyField = "strategy=" + l.StrategyID
+		}
+		fmt.Printf("%-24s  holder=%-20s  since=%s  %s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339), strategyField)
 	}
 	return 0
 }

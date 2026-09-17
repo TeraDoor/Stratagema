@@ -401,3 +401,94 @@ func TestStrategyNextRecapsRecentEventsAndSystemWideLocks(t *testing.T) {
 		}
 	}
 }
+
+// TestStrategyNextDistinguishesLinkedLocks is the CLI-level proof that
+// `strategy next` now reads a real link, not the old "every held lock,
+// informational only" dump: a lock acquired with -strategy=<this strategy>
+// must appear in the linked section, and a lock acquired with no -strategy
+// at all must appear only in the "other" section, unlinked.
+func TestStrategyNextDistinguishesLinkedLocks(t *testing.T) {
+	bin := buildBinary(t)
+	db := filepath.Join(t.TempDir(), "strategy-linked-locks.db")
+
+	run := func(cmd, sub string, rest ...string) (int, string) {
+		var flags, positional []string
+		for _, a := range rest {
+			if strings.HasPrefix(a, "-") {
+				flags = append(flags, a)
+			} else {
+				positional = append(positional, a)
+			}
+		}
+		full := append([]string{cmd, sub, "-db=" + db}, flags...)
+		full = append(full, positional...)
+		out, err := exec.Command(bin, full...).CombinedOutput()
+		switch e := err.(type) {
+		case nil:
+			return 0, string(out)
+		case *exec.ExitError:
+			return e.ExitCode(), string(out)
+		default:
+			t.Fatalf("unexpected error running binary: %v", err)
+			return -1, ""
+		}
+	}
+
+	idCode, idOut := run("identity", "create", "-label=agent-doing-the-work")
+	identity := extractID(t, idCode, idOut)
+
+	createCode, createOut := run("strategy", "create", "-name=lock-link-probe", "-thesis=strategy next distinguishes linked locks from other locks")
+	stratID := extractID(t, createCode, createOut)
+
+	otherStratCode, otherStratOut := run("strategy", "create", "-name=unrelated-strategy", "-thesis=a different strategy entirely")
+	otherStratID := extractID(t, otherStratCode, otherStratOut)
+
+	// A lock explicitly linked to the strategy under test.
+	if code, out := run("lock", "acquire", "-resource=src/pool.go", "-identity="+identity, "-note=working on it", "-strategy="+stratID); code != 0 {
+		t.Fatalf("lock acquire (linked) failed (exit %d): %s", code, out)
+	}
+	// A lock with no -strategy at all — must stay unlinked.
+	if code, out := run("lock", "acquire", "-resource=docs/readme.md", "-identity="+identity, "-note=side task"); code != 0 {
+		t.Fatalf("lock acquire (unlinked) failed (exit %d): %s", code, out)
+	}
+	// A lock linked to a *different* strategy — must show up as "other", not as linked.
+	if code, out := run("lock", "acquire", "-resource=config/db.yaml", "-identity="+identity, "-note=unrelated work", "-strategy="+otherStratID); code != 0 {
+		t.Fatalf("lock acquire (other strategy) failed (exit %d): %s", code, out)
+	}
+
+	nextCode, nextOut := run("strategy", "next", stratID)
+	if nextCode != 0 {
+		t.Fatalf("strategy next failed (exit %d): %s", nextCode, nextOut)
+	}
+
+	linkedIdx := strings.Index(nextOut, "locks linked to this strategy")
+	otherIdx := strings.Index(nextOut, "other locks held system-wide")
+	if linkedIdx == -1 || otherIdx == -1 {
+		t.Fatalf("strategy next should print both a linked-locks section and an other-locks section, got:\n%s", nextOut)
+	}
+	if linkedIdx > otherIdx {
+		t.Fatalf("expected the linked-locks section before the other-locks section, got:\n%s", nextOut)
+	}
+	linkedSection := nextOut[linkedIdx:otherIdx]
+	otherSection := nextOut[otherIdx:]
+
+	if !strings.Contains(linkedSection, "src/pool.go") {
+		t.Fatalf("linked-locks section should contain the lock explicitly acquired for this strategy, got:\n%s", linkedSection)
+	}
+	if strings.Contains(linkedSection, "docs/readme.md") || strings.Contains(linkedSection, "config/db.yaml") {
+		t.Fatalf("linked-locks section should not contain locks that aren't linked to this strategy, got:\n%s", linkedSection)
+	}
+
+	if !strings.Contains(otherSection, "docs/readme.md") || !strings.Contains(otherSection, "config/db.yaml") {
+		t.Fatalf("other-locks section should contain both the unlinked lock and the lock linked to a different strategy, got:\n%s", otherSection)
+	}
+	if strings.Contains(otherSection, "src/pool.go") {
+		t.Fatalf("other-locks section should not contain the lock linked to this strategy, got:\n%s", otherSection)
+	}
+
+	// The now-obsolete "informational only" framing must be gone — the
+	// link is real now.
+	if strings.Contains(nextOut, "informational only") {
+		t.Fatalf("strategy next should no longer claim locks are informational-only, got:\n%s", nextOut)
+	}
+}
