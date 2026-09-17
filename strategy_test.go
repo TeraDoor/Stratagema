@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -180,6 +181,47 @@ func TestLogStrategyEventAcceptsResourceUsage(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Kind != "resource_usage" || events[0].Note != "42000 tokens, claude-code" {
 		t.Fatalf("ListStrategyEvents: got %+v, want one resource_usage event", events)
+	}
+}
+
+// TestLogStrategyEventAcceptsExternalSignal confirms external_signal logs
+// and reads back like any other event kind — schema-only support, no
+// enforcement, and no claim that logging one closes the external-observe
+// gap. Also confirms an unknown kind is still rejected, with the error
+// text listing external_signal alongside the other kinds.
+func TestLogStrategyEventAcceptsExternalSignal(t *testing.T) {
+	s := newTestStore(t)
+	alpha, err := s.CreateIdentity("agent-alpha")
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	st, err := s.CreateStrategy("probe", "thesis")
+	if err != nil {
+		t.Fatalf("CreateStrategy: %v", err)
+	}
+
+	ev, err := s.LogStrategyEvent(st.ID, alpha.ID, "external_signal", "real user filed issue #12 after trying the CLI")
+	if err != nil {
+		t.Fatalf("LogStrategyEvent(external_signal): %v", err)
+	}
+	if ev.Kind != "external_signal" {
+		t.Fatalf("Kind = %q, want %q", ev.Kind, "external_signal")
+	}
+
+	events, err := s.ListStrategyEvents(st.ID)
+	if err != nil {
+		t.Fatalf("ListStrategyEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != "external_signal" || events[0].Note != "real user filed issue #12 after trying the CLI" {
+		t.Fatalf("ListStrategyEvents: got %+v, want one external_signal event", events)
+	}
+
+	_, err = s.LogStrategyEvent(st.ID, alpha.ID, "made-up-kind", "note")
+	if err == nil {
+		t.Fatal("want an error for an unknown event kind")
+	}
+	if !strings.Contains(err.Error(), "external_signal") {
+		t.Fatalf("error text = %q, want it to list external_signal as a valid kind", err.Error())
 	}
 }
 
