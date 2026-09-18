@@ -5,6 +5,15 @@ import (
 	"os"
 )
 
+// version is stamped at build time via:
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
+//
+// A plain `go build` (no ldflags) leaves this at its zero value, so the
+// version command falls back to something honest rather than a stale
+// hardcoded string that silently drifts from what was actually released.
+var version = ""
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -26,7 +35,11 @@ func main() {
 	case "serve":
 		code = cmdServe(rest)
 	case "version":
-		fmt.Println("stratagema 0.1.0-dev")
+		v := version
+		if v == "" {
+			v = "0.0.0-dev"
+		}
+		fmt.Printf("stratagema %s\n", v)
 		code = 0
 	case "-h", "--help", "help":
 		usage()
