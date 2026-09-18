@@ -20,20 +20,7 @@ type Faculty struct {
 	Capability string
 	Harness    string
 	Tools      []string
-	Core       string // optional: plan|produce|verify|deliver, "" if unset
 	Body       string // everything after the closing ---, trimmed
-}
-
-// validCoreValues is the domain-neutral lifecycle-stage taxonomy a Faculty
-// may declare itself as serving. Deliberately not SWE-specific
-// (plan/dev/test/deploy): "verify" absorbs testing into "produce" rather
-// than keeping it a separate wall, matching what every proto-strategy so
-// far has actually done (builders test their own work).
-var validCoreValues = map[string]bool{
-	"plan":    true,
-	"produce": true,
-	"verify":  true,
-	"deliver": true,
 }
 
 // defaultFacultiesDir mirrors defaultDBPath's own resolution order in
@@ -66,7 +53,6 @@ var (
 	ErrMissingClosingDelimiter = errors.New("missing closing --- delimiter (frontmatter block was never closed)")
 	ErrToolsNotBracketList     = errors.New(`tools value must be a bracketed list, e.g. tools: [read_file, write_file]`)
 	ErrToolsEmpty              = errors.New("tools list must not be empty")
-	ErrInvalidCore             = errors.New("core value must be one of: plan, produce, verify, deliver")
 )
 
 // missingFieldError reports a required frontmatter key that was absent or
@@ -128,16 +114,15 @@ func ParseFaculty(data []byte) (*Faculty, error) {
 				return nil, err
 			}
 			f.Tools = tools
-		case "core":
-			if !validCoreValues[value] {
-				return nil, ErrInvalidCore
-			}
-			f.Core = value
 		default:
 			// Unknown keys are ignored rather than rejected: this format
 			// is deliberately small and flat, and a future field showing
 			// up in a hand-authored file shouldn't hard-fail every
-			// existing tool that hasn't learned it yet.
+			// existing tool that hasn't learned it yet. This is also what
+			// makes a hand-authored file that still has a leftover "core:"
+			// line (written before that field was cut, S085) continue to
+			// parse cleanly — it's just silently unrecognized now, not an
+			// error.
 		}
 	}
 
@@ -209,9 +194,6 @@ func (f *Faculty) render() string {
 	fmt.Fprintf(&b, "capability: %s\n", f.Capability)
 	fmt.Fprintf(&b, "harness: %s\n", f.Harness)
 	fmt.Fprintf(&b, "tools: [%s]\n", strings.Join(f.Tools, ", "))
-	if f.Core != "" {
-		fmt.Fprintf(&b, "core: %s\n", f.Core)
-	}
 	b.WriteString("---\n\n")
 	b.WriteString(f.Body)
 	b.WriteString("\n")
@@ -245,14 +227,10 @@ func cmdFacultyCreate(args []string) int {
 	capability := fs.String("capability", "", "short label for what this role is for, e.g. go-development (required)")
 	harness := fs.String("harness", "", "the agent harness this role runs under, e.g. claude-code (required)")
 	tools := fs.String("tools", "", "comma-separated tool list, e.g. read_file,write_file,exec (required)")
-	core := fs.String("core", "", "lifecycle stage this Faculty serves: plan|produce|verify|deliver (optional)")
 	fs.Parse(args)
 
 	if *name == "" || *capability == "" || *harness == "" || *tools == "" {
 		return die(1, "faculty create: -name, -capability, -harness, and -tools are all required")
-	}
-	if *core != "" && !validCoreValues[*core] {
-		return die(1, "faculty create: %v", ErrInvalidCore)
 	}
 
 	toolList := strings.Split(*tools, ",")
@@ -279,7 +257,6 @@ func cmdFacultyCreate(args []string) int {
 		Capability: *capability,
 		Harness:    *harness,
 		Tools:      toolList,
-		Core:       *core,
 		Body: fmt.Sprintf(
 			"Describe %s's actual behavior here: what it does, what it deliberately\n"+
 				"does not do, and how it should coordinate with other Faculties sharing\n"+
@@ -304,9 +281,6 @@ func cmdFacultyCreate(args []string) int {
 	}
 
 	fmt.Printf("created %s\n  capability: %s\n  harness:    %s\n  tools:      %s\n", path, f.Capability, f.Harness, strings.Join(f.Tools, ", "))
-	if f.Core != "" {
-		fmt.Printf("  core:       %s\n", f.Core)
-	}
 	return 0
 }
 
@@ -348,11 +322,7 @@ func cmdFacultyList(args []string) int {
 			exit = 1
 			continue
 		}
-		core := f.Core
-		if core == "" {
-			core = "-"
-		}
-		fmt.Printf("%-20s  %-24s  %-14s  %s\n", f.Name, f.Capability, f.Harness, core)
+		fmt.Printf("%-20s  %-24s  %s\n", f.Name, f.Capability, f.Harness)
 	}
 	return exit
 }
@@ -379,9 +349,6 @@ func cmdFacultyShow(args []string) int {
 	fmt.Printf("capability: %s\n", f.Capability)
 	fmt.Printf("harness:    %s\n", f.Harness)
 	fmt.Printf("tools:      %s\n", strings.Join(f.Tools, ", "))
-	if f.Core != "" {
-		fmt.Printf("core:       %s\n", f.Core)
-	}
 	fmt.Println()
 	fmt.Println(f.Body)
 	return 0
