@@ -310,6 +310,97 @@ here rather than left for someone to discover:
   schema sharing one database file isn't detected or prevented — keep
   the binary in sync across every process touching the same database.
 
+## `stratagema-runner`: a separate tool that actually launches a harness
+
+Stratagema itself coordinates agents; it deliberately does not run them —
+see "No forever-running orchestrator" above. `stratagema-runner` is a
+genuinely separate binary, built and run independently
+(`go build -o bin/stratagema-runner ./runner`, never wired into
+`stratagema`'s own command switch), that takes the first real step past
+that boundary: it launches one agent harness (Claude Code, Codex, ...)
+against one [Faculty](#status-early-four-primitives-real-and-tested) for
+one strategy, and reports back — but only as an ordinary client of
+Stratagema's existing public Coordinator API, the same HTTP surface
+`RemoteStore` and any other remote client use. It never imports
+`stratagema`'s `Store`/`Coordinator` types and acts as if it were part of
+the core, which is what keeps a later, heavier version of this tool (spawn
+in a sandboxed container instead of on this machine) a change to
+`stratagema-runner`'s internals only, never to Stratagema's coordination
+core. In fact the boundary is enforced by the Go compiler as much as by
+discipline here: `stratagema`'s root package is a single flat `package
+main` (per `go.mod`), which Go cannot import from anywhere — so `runner/`
+reimplements the small, stable slice of Faculty-parsing and
+Coordinator-HTTP-calling it actually needs (`runner/faculty.go`,
+`runner/client.go`) rather than sharing code with the root package.
+
+**Flags:**
+
+```
+stratagema-runner -faculty=<path> -harness-cmd=<cmd> -db=<url> \
+                   -identity=<id> -strategy=<id> -task=<text> [-token=<token>]
+```
+
+- `-faculty` — path to the Faculty file to run.
+- `-harness-cmd` — the literal shell command to invoke, e.g. `"claude -p"`
+  or `"codex exec"`. Run through `sh -c`, with the constructed prompt
+  appended as one trailing positional argument (`sh -c 'cmd "$@"' sh
+  <prompt>`) — matching how `claude -p "<prompt>"` and `codex exec
+  "<prompt>"` both take a prompt. No harness-name-to-command mapping
+  table: the operator supplies the exact command directly (see "not
+  built" below).
+- `-db` — a coordinator URL (`http://` or `https://`) for a running
+  `stratagema serve` instance. Unlike every other command in this
+  project, **`stratagema-runner` does not accept a local SQLite file
+  path** — see `runner/client.go`'s `requireRemoteDB` doc comment: talking
+  to a local file directly would mean re-implementing `Store`'s write
+  path in-process, exactly the pattern this tool's architecture rules
+  out. For local/personal use, run `stratagema serve -db=<file>` yourself
+  and point `-db` at `http://localhost:<port>`.
+- `-identity` — an existing identity ID to act as. The runner does not
+  create identities.
+- `-strategy` — an existing strategy ID to log against. The runner does
+  not create strategies.
+- `-task` — a short description of this run, appended to the Faculty's
+  own prose as the actual prompt sent to the harness.
+- `-token` / `STRATAGEMA_TOKEN` — same convention as the main CLI, for a
+  protected identity.
+
+**The one real, load-bearing piece of logic here.** Every
+`strategy_events` kind today is self-attested — written by whichever
+identity chose to write it, with no equivalent of a Unix process's real
+exit code, "the one signal in the entire model that isn't self-reported."
+`stratagema-runner` is a partial, honest answer for exactly one case: the
+harness process it launches has a real kernel-supplied exit code, not a
+self-reported one. Exit `0` logs a `step_completed` event with a
+truncated (≤4KB, stated as such if cut) summary of the harness's stdout;
+any non-zero exit logs a `finding` event stating the real exit code and a
+truncated summary of stderr — honestly, never as `step_completed`. It
+still covers only one event kind's worth of ground truth, not a general
+"gate"/exit-code primitive for every strategy step — see this project's
+own gap analysis for the fuller picture.
+
+**What this deliberately does not do (real, separate, future scope):**
+
+- **No Schema/DAG execution.** "Schema" (a `steps[]`/`depends_on` DAG
+  composing multiple Faculties) was designed in docs but never built as
+  parseable code — only a single `Faculty` exists today. This runner runs
+  exactly one Faculty, once; multi-step orchestration is a real,
+  separate, larger feature.
+- **No harness-name-to-command config/mapping.** `-harness-cmd` is typed
+  out in full every time. A config file or name→command table (`claude` →
+  `claude -p`, `codex` → `codex exec`, ...) is a real, separate feature.
+- **No sandboxing, no containerization, no process supervision or
+  restart-on-crash, no daemon.** This runs once, does its one job
+  (launch the harness, log what happened), and exits. Making this a
+  "platform" — spawn in an isolated container, run many of these under a
+  scheduler — is the explicit long-run direction, not attempted here.
+- **No lock acquisition.** The runner does not claim any resource lock on
+  behalf of the identity it acts as before invoking the harness. Whether
+  a runner *should* auto-lock whatever it's about to touch is a real,
+  separate design question, left open.
+- **No identity/token creation.** The runner acts as an identity that
+  must already exist; it never creates one.
+
 ## Who this is for
 
 A solo developer running more than one agent against the same project who
