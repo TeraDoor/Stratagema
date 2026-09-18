@@ -141,12 +141,28 @@ Each invocation should exit 0 and leave a binary at `$out`.
 Found by an actual durability/edge-case pass, not theoretical — stated
 here rather than left for someone to discover:
 
-- **No identity authentication.** An `-identity=` value is a bare,
-  unverified string everywhere. Any process that can reach the database
-  can acquire, release, or force-release a lock under any identity,
-  including one it doesn't "own." Fine for one trusted developer's own
-  machine; a real gap before recommending shared, less-trusted, or
-  adversarial use.
+- **Identity authentication is opt-in, per identity, not a blanket
+  requirement.** `identity create -protect` generates a real random
+  secret (32 bytes from `crypto/rand`), prints it exactly once, and
+  stores only its `sha256` hash. From then on, every identity-scoped
+  mutating command for that identity — `lock acquire/renew/release`,
+  `interest create`, `strategy log/log-usage/close` — requires a valid
+  token (`STRATAGEMA_TOKEN` env var, or `-token=` for scripting) via a
+  single shared, constant-time-compared verification path, or it's
+  rejected cleanly. `interest inbox` is included too: reading a
+  protected identity's own inbox can leak another identity's lock notes
+  and activity pattern, so it's treated as the same concern even though
+  it's a read, not a mutation. An identity created the plain way (no
+  `-protect`, everything before this feature, and the default today)
+  behaves with zero observable difference — still just a bare,
+  unverified label, exactly as before. **Not built, deliberately:**
+  token rotation, revocation, un-protecting an identity after creation,
+  or any session/expiry mechanism for the token itself — protection is
+  permanent once set, and the one token issued at creation is the only
+  one that will ever work. Fine for one trusted developer's own machine
+  even before touching this; a real step toward shared, less-trusted, or
+  adversarial use once identities that need it are actually protected —
+  not a complete access-control system on its own.
 - **SSE reconnect does a full replay, not a resume.** `/stream/interest`
   has no durable cursor across a `serve` restart — a client that
   reconnects gets everything again from the start, not just what it
