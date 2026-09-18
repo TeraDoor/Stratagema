@@ -1,0 +1,91 @@
+name: Release
+
+# Cross-compiles the CLI for the real, common platform/arch combinations and
+# publishes each as a checksummed archive on the GitHub Release for the tag.
+# The only driver is pushing a tag matching v* — nothing else triggers this,
+# and it doesn't touch what ci.yml already covers on every push/PR.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      # No cgo anywhere in this module (modernc.org/sqlite is pure Go), which
+      # is what makes CGO_ENABLED=0 native cross-compilation safe here —
+      # confirmed locally before this workflow was written, not assumed.
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          out=stratagema
+          if [ "${{ matrix.goos }}" = "windows" ]; then out=stratagema.exe; fi
+          go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o "$out" .
+
+      - name: Package
+        run: |
+          name="stratagema-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir "$name"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cp stratagema.exe "$name/"
+          else
+            cp stratagema "$name/"
+          fi
+          cp README.md LICENSE "$name/"
+
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -r "${name}.zip" "$name"
+            sha256sum "${name}.zip" > "${name}.zip.sha256"
+          else
+            tar -czf "${name}.tar.gz" "$name"
+            sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stratagema-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            stratagema-*.tar.gz
+            stratagema-*.tar.gz.sha256
+            stratagema-*.zip
+            stratagema-*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
