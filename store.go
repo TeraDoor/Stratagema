@@ -98,15 +98,17 @@ CREATE TABLE IF NOT EXISTS locks (
 	holder_identity_id TEXT NOT NULL,
 	note               TEXT,
 	acquired_at        INTEGER NOT NULL,
-	strategy_id        TEXT -- optional link to strategies.id; empty/NULL = unlinked
+	strategy_id        TEXT,   -- optional link to strategies.id; empty/NULL = unlinked
+	lease_seconds      INTEGER, -- optional: NULL = no lease, today's exact behavior (never expires)
+	renewed_at         INTEGER  -- last renewal timestamp; set on acquire and on every renew; NULL when lease_seconds is NULL
 );
 
 CREATE TABLE IF NOT EXISTS lock_events (
 	id                 TEXT PRIMARY KEY,
 	resource           TEXT NOT NULL,
-	kind               TEXT NOT NULL, -- acquired | denied | released
+	kind               TEXT NOT NULL, -- acquired | denied | released | reclaimed
 	identity_id        TEXT NOT NULL, -- who performed/attempted this action
-	holder_identity_id TEXT,          -- denied: who currently holds it; released: who held it
+	holder_identity_id TEXT,          -- denied: who currently holds it; released: who held it; reclaimed: who it was reclaimed from
 	note               TEXT,
 	forced             INTEGER NOT NULL DEFAULT 0,
 	ts                 INTEGER NOT NULL,
