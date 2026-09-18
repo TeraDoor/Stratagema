@@ -185,12 +185,14 @@ func TestLogStrategyEventAcceptsResourceUsage(t *testing.T) {
 	}
 }
 
-// TestLogStrategyEventAcceptsExternalSignal confirms external_signal logs
-// and reads back like any other event kind — schema-only support, no
-// enforcement, and no claim that logging one closes the external-observe
-// gap. Also confirms an unknown kind is still rejected, with the error
-// text listing external_signal alongside the other kinds.
-func TestLogStrategyEventAcceptsExternalSignal(t *testing.T) {
+// TestLogStrategyEventNoLongerAcceptsExternalSignal documents a
+// deliberate reversal, not a regression: external_signal was added
+// S077/S078, tried, and cut S081 (see validStrategyEventKinds' doc
+// comment) for never gaining a real writer, unlike resource_usage. This
+// pins the cut down the same way this project pins any other real
+// behavior — a kind that used to be valid must now be rejected exactly
+// like any other unknown kind, and the error text must not still list it.
+func TestLogStrategyEventNoLongerAcceptsExternalSignal(t *testing.T) {
 	s := newTestStore(t)
 	alpha, err := s.CreateIdentity("agent-alpha")
 	if err != nil {
@@ -201,28 +203,20 @@ func TestLogStrategyEventAcceptsExternalSignal(t *testing.T) {
 		t.Fatalf("CreateStrategy: %v", err)
 	}
 
-	ev, err := s.LogStrategyEvent(st.ID, alpha.ID, "external_signal", "real user filed issue #12 after trying the CLI")
-	if err != nil {
-		t.Fatalf("LogStrategyEvent(external_signal): %v", err)
+	_, err = s.LogStrategyEvent(st.ID, alpha.ID, "external_signal", "note")
+	if err == nil {
+		t.Fatal("external_signal was cut S081, want an error, got nil")
 	}
-	if ev.Kind != "external_signal" {
-		t.Fatalf("Kind = %q, want %q", ev.Kind, "external_signal")
+	if strings.Contains(err.Error(), "|external_signal") || strings.HasSuffix(err.Error(), "external_signal)") {
+		t.Fatalf("error text still lists external_signal as valid: %q", err.Error())
 	}
 
 	events, err := s.ListStrategyEvents(st.ID)
 	if err != nil {
 		t.Fatalf("ListStrategyEvents: %v", err)
 	}
-	if len(events) != 1 || events[0].Kind != "external_signal" || events[0].Note != "real user filed issue #12 after trying the CLI" {
-		t.Fatalf("ListStrategyEvents: got %+v, want one external_signal event", events)
-	}
-
-	_, err = s.LogStrategyEvent(st.ID, alpha.ID, "made-up-kind", "note")
-	if err == nil {
-		t.Fatal("want an error for an unknown event kind")
-	}
-	if !strings.Contains(err.Error(), "external_signal") {
-		t.Fatalf("error text = %q, want it to list external_signal as a valid kind", err.Error())
+	if len(events) != 0 {
+		t.Fatalf("a rejected LogStrategyEvent must not have written anything, got %+v", events)
 	}
 }
 
