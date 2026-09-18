@@ -13,10 +13,18 @@ being described after the fact.
 
 ## Status: early, four primitives real and tested
 
-- **Resource locks** — `lock acquire/release/status/list`. One holder per
-  named resource, fail-fast: asking for a held lock gets an immediate no
-  (who holds it, since when), never a queue. Re-acquiring your own lock is
-  idempotent; releasing someone else's requires `-force`, always logged.
+- **Resource locks** — `lock acquire/release/renew/status/list`. One holder
+  per named resource, fail-fast: asking for a held lock gets an immediate
+  no (who holds it, since when), never a queue. Re-acquiring your own lock
+  is idempotent; releasing someone else's requires `-force`, always logged.
+  Leases are opt-in (`-lease=<seconds>`, then `lock renew`): a lock
+  acquired without one behaves exactly as before, but a leased lock whose
+  holder stops renewing — a crashed agent, not a slow one — can be
+  reclaimed by someone else without `-force`, logged as its own
+  `reclaimed` event distinct from a forced override. Staleness is checked
+  lazily wherever a lock is read, never by a background process —
+  Kubernetes' Lease API is the closer precedent than a liveness probe,
+  since it doesn't need a resident watcher either.
 - **Interest / event propagation** — `interest create/list/pause/resume/
   inbox/ack`. Subscribe to a resource by name; a denied acquire or a
   release notifies every active subscriber (an uncontested acquire stays
