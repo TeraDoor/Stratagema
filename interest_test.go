@@ -25,10 +25,10 @@ func TestPausedInterestDoesNotReceivePropagations(t *testing.T) {
 		t.Fatalf("SetInterestStatus(paused): %v", err)
 	}
 
-	if _, err := s.AcquireLock("res", alpha.ID, "", ""); err != nil {
+	if _, err := s.AcquireLock("res", alpha.ID, "", "", 0); err != nil {
 		t.Fatalf("AcquireLock: %v", err)
 	}
-	if _, err := s.AcquireLock("res", beta.ID, "", ""); err == nil {
+	if _, err := s.AcquireLock("res", beta.ID, "", "", 0); err == nil {
 		t.Fatal("want the acquire to be denied (alpha holds it)")
 	}
 
@@ -75,10 +75,10 @@ func TestListLocksReturnsAllActiveLocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIdentity: %v", err)
 	}
-	if _, err := s.AcquireLock("res-a", alpha.ID, "", ""); err != nil {
+	if _, err := s.AcquireLock("res-a", alpha.ID, "", "", 0); err != nil {
 		t.Fatalf("AcquireLock(res-a): %v", err)
 	}
-	if _, err := s.AcquireLock("res-b", alpha.ID, "", ""); err != nil {
+	if _, err := s.AcquireLock("res-b", alpha.ID, "", "", 0); err != nil {
 		t.Fatalf("AcquireLock(res-b): %v", err)
 	}
 
