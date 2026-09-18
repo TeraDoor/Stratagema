@@ -103,9 +103,9 @@ func TestServeStreamInterestRequiresIdentity(t *testing.T) {
 // without polling — not just that the underlying store method returns
 // the right rows.
 func TestServeStreamInterestDeliversLive(t *testing.T) {
-	s, err := openStore(filepath.Join(t.TempDir(), "test.db"))
+	s, err := openLocalStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("openStore: %v", err)
+		t.Fatalf("openLocalStore: %v", err)
 	}
 	defer s.Close()
 

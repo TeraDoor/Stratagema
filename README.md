@@ -48,6 +48,12 @@ being described after the fact.
   agent-role definition (a markdown file: settings up top, behavior in
   prose below). The format was already usable by hand; this is scaffolding,
   listing, and viewing them without hand-editing files directly.
+- **Remote coordination** — every command's `-db` flag also accepts
+  `http://host:port`/`https://host:port`, talking to a running `stratagema
+  serve` over HTTP/JSON instead of opening a local SQLite file. This is
+  what makes `serve` an actual hosted coordinator two agents on two
+  different machines can share, not just a read-only dashboard over one
+  process's local file. See "Remote mode" below.
 
 Not yet done: a Planner that proposes a strategy from a one-line intent, and
 a way for a strategy to stay open and keep collecting findings after
@@ -88,6 +94,79 @@ $BIN lock acquire -db=$DB -resource=shared-config -identity=$beta  # now succeed
 
 For live push instead of polling `inbox`, run `stratagema serve -db=$DB`
 in another terminal and `curl -sN "http://localhost:7979/stream/interest?identity=$beta"`.
+
+## Remote mode: coordinating across machines
+
+Every command's `-db` flag accepts a URL (`http://` or `https://`), not just
+a local file path — this is what makes `serve` an actual hosted coordinator
+instead of a read-only dashboard. Run `stratagema serve -db=$DB` on one
+machine, then point any other process at it exactly like a local file:
+
+```
+# machine/process A: the coordinator
+stratagema serve -db=./events.db -port=7979
+
+# machine/process B (or a second terminal on the same one)
+stratagema identity create -db=http://coordinator-host:7979 -label=agent-remote
+stratagema lock acquire    -db=http://coordinator-host:7979 -resource=shared-config -identity=$id -note=editing
+stratagema strategy create -db=http://coordinator-host:7979 -name=... -thesis=...
+```
+
+Every subcommand works identically either way — `-db=./file.db` and
+`-db=http://host:port` are interchangeable everywhere a database path is
+accepted, because `openStore` (`store.go`) is the single place that decides
+which one a given value means; nothing downstream of it knows or cares.
+Internally this is `RemoteStore` (`remote.go`), a second implementation of
+the same `Coordinator` interface `*Store` already satisfies, talking
+HTTP/JSON to the routes `serve` exposes (`serve.go`'s `newMux`) — `stratagema
+serve`'s own startup output prints the full route table.
+
+**Auth over the wire.** A protected identity (`identity create -protect`)
+works the same way remotely as locally: `-token=`/`STRATAGEMA_TOKEN` is
+checked via `POST /identities/verify`, which reads the token from a
+standard `Authorization: Bearer <token>` header and returns a real 401 on a
+missing or wrong one. This is its own HTTP round trip, separate from the
+mutating call that follows (`lock acquire`, `strategy log`, ...) — mirroring
+the existing local shape, where a `cmd*` function calls
+`VerifyIdentityToken` as an explicit pre-check before acting, not folded
+into the action itself. That costs one extra request per mutating command
+in remote mode versus local mode's single in-process call — an accepted,
+honest tradeoff, not something this feature tries to optimize away by
+restructuring how commands work.
+
+**Real HTTP status codes**, not a blanket 200/500: 400 for a malformed or
+incomplete request, 401 for a failed identity-token verification, 404 for
+an unknown id, 409 for a genuine conflict (e.g. `lock acquire` on a resource
+someone else already holds), 500 for anything unexpected. `RemoteStore`
+turns a non-2xx response back into a plain Go error carrying the server's
+message — not a typed error a caller can `errors.Is` against, matching how
+every existing `cmd*` function already just does `if err != nil { die(...)
+}` today.
+
+**Known gap, stated plainly, not built here:** the new write/read endpoints
+have no network-level access control beyond identity-token verification on
+the specific mutating calls that already checked it locally
+(`AcquireLock`/`ReleaseLock`/`RenewLock`, `CreateInterest`, `strategy
+log`/`log-usage`/`close`) — and even those endpoints don't themselves
+re-verify a token on the mutating request itself, because the underlying
+`Coordinator` methods (`AcquireLock` and friends) take no token parameter
+to check; `/identities/verify` is the one and only enforcement point, the
+same way today's local CLI enforces it as a separate pre-check rather than
+inside `Store`'s own methods. A caller with direct network access to a
+running `serve` has exactly the capability a caller with direct access to
+the local `.db` file already has today: nothing stops a raw request to
+`POST /locks/acquire` that never called `/identities/verify` first, the
+same way nothing stops a Go program that imports this package's `Store`
+type directly from skipping `VerifyIdentityToken` today. There is no
+TLS, no general request authentication, and no rate-limiting anywhere in
+this surface — the existing unauthenticated `GET /locks` and `GET
+/stream/interest` were already this permissive before this feature
+existed, and every new route matches that same posture rather than
+inventing a stricter one inconsistently. A genuinely "hosted, safe by
+default" server is a real, separate, bigger problem — TLS termination,
+network-wide authentication, rate-limiting — not attempted here. Put a
+`serve` instance behind something that provides that (a reverse proxy,
+a VPN, an SSH tunnel) before exposing it beyond a trusted network.
 
 ## What this deliberately is not
 

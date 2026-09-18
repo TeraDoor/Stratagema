@@ -10,9 +10,9 @@ import (
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := openStore(filepath.Join(t.TempDir(), "test.db"))
+	s, err := openLocalStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("openStore: %v", err)
+		t.Fatalf("openLocalStore: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
