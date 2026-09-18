@@ -563,6 +563,7 @@ func cmdStrategyLog(args []string) int {
 	identity := fs.String("identity", "", "identity ID logging this event (required)")
 	kind := fs.String("kind", "", "step_started|step_completed|finding|decision|reflection|resource_usage (required)")
 	note := fs.String("note", "", "what happened (required)")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	rest := fs.Args()
@@ -577,6 +578,10 @@ func cmdStrategyLog(args []string) int {
 		return die(1, "strategy log: %v", err)
 	}
 	defer store.Close()
+
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "strategy log: %v", err)
+	}
 
 	ev, err := store.LogStrategyEvent(rest[0], *identity, *kind, *note)
 	if err != nil {
@@ -600,8 +605,9 @@ func cmdStrategyLogUsage(args []string) int {
 	dbFlag := dbPathFlag(fs)
 	identity := fs.String("identity", "", "identity ID logging this usage (required)")
 	harness := fs.String("harness", "", "agent harness that did the work, e.g. claude-code (required)")
-	tokens := fs.Int64("tokens", -1, "tokens used, non-negative integer (required)")
+	tokensFlag := fs.Int64("tokens", -1, "tokens used, non-negative integer (required)")
 	cost := fs.Float64("cost", 0, "USD cost (optional, omitted from the note if zero/unset)")
+	authToken := tokenFlag(fs)
 	fs.Parse(args)
 
 	rest := fs.Args()
@@ -611,7 +617,7 @@ func cmdStrategyLogUsage(args []string) int {
 	if *identity == "" || *harness == "" {
 		return die(1, "strategy log-usage: -identity and -harness are required")
 	}
-	if *tokens < 0 {
+	if *tokensFlag < 0 {
 		return die(1, "strategy log-usage: -tokens is required and must be non-negative")
 	}
 	store, err := openStore(*dbFlag)
@@ -620,7 +626,11 @@ func cmdStrategyLogUsage(args []string) int {
 	}
 	defer store.Close()
 
-	note := resourceUsageNote(*harness, *tokens, *cost, *cost != 0)
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*authToken)); err != nil {
+		return die(1, "strategy log-usage: %v", err)
+	}
+
+	note := resourceUsageNote(*harness, *tokensFlag, *cost, *cost != 0)
 	ev, err := store.LogStrategyEvent(rest[0], *identity, "resource_usage", note)
 	if err != nil {
 		return die(1, "strategy log-usage: %v", err)
@@ -741,6 +751,7 @@ func cmdStrategyClose(args []string) int {
 	dbFlag := dbPathFlag(fs)
 	identity := fs.String("identity", "", "identity ID closing this strategy (required)")
 	outcome := fs.String("outcome", "", "the final outcome note, recorded as a reflection event (required)")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	rest := fs.Args()
@@ -755,6 +766,10 @@ func cmdStrategyClose(args []string) int {
 		return die(1, "strategy close: %v", err)
 	}
 	defer store.Close()
+
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "strategy close: %v", err)
+	}
 
 	if err := store.CloseStrategy(rest[0], *identity, *outcome); err != nil {
 		return die(1, "strategy close: %v", err)

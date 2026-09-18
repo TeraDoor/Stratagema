@@ -322,6 +322,7 @@ func cmdInterestCreate(args []string) int {
 	identity := fs.String("identity", "", "identity ID this interest belongs to (required)")
 	resource := fs.String("resource", "", "resource name to watch, exact match (required)")
 	label := fs.String("label", "", "human-readable note")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	if *identity == "" || *resource == "" {
@@ -332,6 +333,10 @@ func cmdInterestCreate(args []string) int {
 		return die(1, "interest create: %v", err)
 	}
 	defer store.Close()
+
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "interest create: %v", err)
+	}
 
 	in, err := store.CreateInterest(*identity, *resource, *label)
 	if err != nil {
@@ -393,6 +398,7 @@ func cmdInterestInbox(args []string) int {
 	dbFlag := dbPathFlag(fs)
 	identity := fs.String("identity", "", "identity ID to show the inbox for (required)")
 	all := fs.Bool("all", false, "include already-acknowledged deliveries (default: pending only)")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	if *identity == "" {
@@ -403,6 +409,18 @@ func cmdInterestInbox(args []string) int {
 		return die(1, "interest inbox: %v", err)
 	}
 	defer store.Close()
+
+	// Reading X's inbox is a read path, not the mutating "act as X" concern
+	// the README's known-limitations gap literally named (acquiring/
+	// releasing a lock under a claimed identity) -- but once an identity is
+	// protected, its inbox is exactly the adjacent information-disclosure
+	// case: propagation deliveries can carry another identity's lock notes,
+	// resource names, and activity pattern. Extended to require the same
+	// token deliberately, for consistency with that concern, not left
+	// ambiguous. See README's "Known limitations" for this stated plainly.
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "interest inbox: %v", err)
+	}
 
 	deliveries, err := store.ListPropagationsForIdentity(*identity, !*all)
 	if err != nil {
