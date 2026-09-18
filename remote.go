@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,17 +25,28 @@ import (
 // Standard library only (net/http, encoding/json) — no new dependency, same
 // zero-framework posture as the rest of this project.
 type RemoteStore struct {
-	baseURL string
-	client  *http.Client
+	baseURL     string
+	client      *http.Client
+	accessToken string // server-wide gate token, read once at construction, sent on every request -- see serve.go's accessTokenHeader
 
 	mu    sync.Mutex
 	token string // last token passed to VerifyIdentityToken, replayed on Authorization: Bearer for subsequent requests
 }
 
+// newRemoteStore reads the server-wide access token once, from the same
+// STRATAGEMA_SERVER_ACCESS_TOKEN env var cmdServe reads its own -access-token
+// default from (serve.go) -- this is the CLI's side of that gate: without
+// this, a server started with -access-token would be undrivable from the
+// CLI at all. Deliberately env-only, no -access-token flag on every remote
+// command: that would mean threading a new flag through every single cmd*
+// function for a value that's realistically constant for a whole session
+// talking to one gated server, the same reasoning STRATAGEMA_DB already
+// follows for -db.
 func newRemoteStore(baseURL string) *RemoteStore {
 	return &RemoteStore{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: 30 * time.Second},
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		client:      &http.Client{Timeout: 30 * time.Second},
+		accessToken: os.Getenv(serverAccessTokenEnv),
 	}
 }
 
@@ -92,6 +104,9 @@ func (r *RemoteStore) request(method, path string, query url.Values, body any) (
 	}
 	if tok := r.currentToken(); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	if r.accessToken != "" {
+		req.Header.Set(accessTokenHeader, r.accessToken)
 	}
 	return req, nil
 }

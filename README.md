@@ -121,18 +121,56 @@ the same `Coordinator` interface `*Store` already satisfies, talking
 HTTP/JSON to the routes `serve` exposes (`serve.go`'s `newMux`) — `stratagema
 serve`'s own startup output prints the full route table.
 
-**Auth over the wire.** A protected identity (`identity create -protect`)
-works the same way remotely as locally: `-token=`/`STRATAGEMA_TOKEN` is
-checked via `POST /identities/verify`, which reads the token from a
-standard `Authorization: Bearer <token>` header and returns a real 401 on a
-missing or wrong one. This is its own HTTP round trip, separate from the
-mutating call that follows (`lock acquire`, `strategy log`, ...) — mirroring
-the existing local shape, where a `cmd*` function calls
-`VerifyIdentityToken` as an explicit pre-check before acting, not folded
-into the action itself. That costs one extra request per mutating command
-in remote mode versus local mode's single in-process call — an accepted,
-honest tradeoff, not something this feature tries to optimize away by
-restructuring how commands work.
+**Auth over the wire** is now two independent, both opt-in layers:
+
+- *Per-identity token verification* (unchanged from before): a protected
+  identity (`identity create -protect`) works the same way remotely as
+  locally — `-token=`/`STRATAGEMA_TOKEN` is checked via `POST
+  /identities/verify`, which reads the token from a standard
+  `Authorization: Bearer <token>` header and returns a real 401 on a
+  missing or wrong one. This is its own HTTP round trip, separate from the
+  mutating call that follows (`lock acquire`, `strategy log`, ...) —
+  mirroring the existing local shape, where a `cmd*` function calls
+  `VerifyIdentityToken` as an explicit pre-check before acting, not folded
+  into the action itself. That costs one extra request per mutating
+  command in remote mode versus local mode's single in-process call — an
+  accepted, honest tradeoff, not something this feature tries to optimize
+  away by restructuring how commands work. This answers "which identity is
+  this caller allowed to act as."
+- *Server-wide access gate* (new): `stratagema serve -access-token=<secret>`
+  (or `STRATAGEMA_SERVER_ACCESS_TOKEN`) requires every single request —
+  every route, including the previously-open `GET /health`, `GET /locks`,
+  and `GET /stream/interest` — to carry that value on a dedicated
+  `X-Stratagema-Access-Token` header, checked with
+  `crypto/subtle.ConstantTimeCompare` before the request reaches any
+  handler, or it's rejected with a real 401. This answers a coarser
+  question: "can this caller reach the server at all." It's a genuinely
+  separate header from `Authorization: Bearer` — deliberately, since a
+  request against a gated server acting as a protected identity carries
+  both at once (one proves you may reach the server, the other proves you
+  may act as that identity), and conflating them into one header would make
+  that combination impossible to express. Point any command at a gated
+  server the same way as `-token`: set `STRATAGEMA_SERVER_ACCESS_TOKEN` in
+  the calling process's environment (read once when `-db=http(s)://...`
+  constructs its `RemoteStore`), or leave it unset against an ungated
+  server — zero observable difference from before this feature existed.
+
+**TLS.** `stratagema serve` also accepts `-tls-cert=<path> -tls-key=<path>`: when
+both are given, it listens with `http.ListenAndServeTLS` instead of plain
+`http.ListenAndServe`, and the startup banner and route-table print the
+real `https://` scheme it's actually serving. Giving only one of the two is
+a real configuration error, rejected at startup with a specific message —
+never silently ignored or guessed at. Leaving both unset is the unchanged
+default: plain HTTP, exactly as before.
+
+This is deliberately narrow: no cert generation, no rotation, no
+ACME/Let's Encrypt integration — that's real, separate infrastructure this
+project isn't taking on. `-tls-cert`/`-tls-key` is for a quick,
+self-contained option (a self-signed cert for testing, or a cert already
+provisioned by other means) — for a real hosted production deployment, the
+more common and recommended path is still a TLS-terminating reverse proxy
+in front of plain-HTTP `serve` (Caddy, nginx, Cloudflare Tunnel, a cloud
+load balancer), not native TLS.
 
 **Real HTTP status codes**, not a blanket 200/500: 400 for a malformed or
 incomplete request, 401 for a failed identity-token verification, 404 for
@@ -143,30 +181,29 @@ message — not a typed error a caller can `errors.Is` against, matching how
 every existing `cmd*` function already just does `if err != nil { die(...)
 }` today.
 
-**Known gap, stated plainly, not built here:** the new write/read endpoints
-have no network-level access control beyond identity-token verification on
-the specific mutating calls that already checked it locally
-(`AcquireLock`/`ReleaseLock`/`RenewLock`, `CreateInterest`, `strategy
-log`/`log-usage`/`close`) — and even those endpoints don't themselves
-re-verify a token on the mutating request itself, because the underlying
-`Coordinator` methods (`AcquireLock` and friends) take no token parameter
-to check; `/identities/verify` is the one and only enforcement point, the
-same way today's local CLI enforces it as a separate pre-check rather than
-inside `Store`'s own methods. A caller with direct network access to a
-running `serve` has exactly the capability a caller with direct access to
-the local `.db` file already has today: nothing stops a raw request to
+**Partially-closed gap, stated plainly:** every mutating call to the
+underlying `Coordinator` methods (`AcquireLock` and friends) still takes no
+token parameter of its own to check, so `/identities/verify` remains the
+one and only place per-identity token verification is enforced — the same
+way today's local CLI enforces it as a separate pre-check rather than
+inside `Store`'s own methods, and nothing new stops a raw
 `POST /locks/acquire` that never called `/identities/verify` first, the
 same way nothing stops a Go program that imports this package's `Store`
-type directly from skipping `VerifyIdentityToken` today. There is no
-TLS, no general request authentication, and no rate-limiting anywhere in
-this surface — the existing unauthenticated `GET /locks` and `GET
-/stream/interest` were already this permissive before this feature
-existed, and every new route matches that same posture rather than
-inventing a stricter one inconsistently. A genuinely "hosted, safe by
-default" server is a real, separate, bigger problem — TLS termination,
-network-wide authentication, rate-limiting — not attempted here. Put a
-`serve` instance behind something that provides that (a reverse proxy,
-a VPN, an SSH tunnel) before exposing it beyond a trusted network.
+type directly from skipping `VerifyIdentityToken` today. What *is* new: the
+optional `-access-token`/TLS pair above close the two gaps that used to be
+unconditional — an unauthenticated caller reading every lock, identity, and
+strategy event log over the network with zero gate, and no way to encrypt
+the wire without a separate reverse proxy. Both remain opt-in and
+coarse-grained by design, not a full access-control system:
+**not built here, deliberately** — rate limiting/DoS protection (a real,
+separate infrastructure concern); any per-route or per-client access
+policy beyond the one shared server-wide gate (the existing per-identity
+token system already covers fine-grained "who can act as which identity" —
+`-access-token` is a different, coarser layer: "can you reach the server at
+all," not an ACL system); and cert management/rotation/ACME (see "TLS"
+above). Put a `serve` instance behind something that provides what's still
+missing (a reverse proxy, a VPN, an SSH tunnel, a rate limiter) before
+exposing it beyond a trusted network.
 
 ## What this deliberately is not
 
@@ -242,6 +279,23 @@ here rather than left for someone to discover:
   even before touching this; a real step toward shared, less-trusted, or
   adversarial use once identities that need it are actually protected —
   not a complete access-control system on its own.
+- **The server-wide access gate (`-access-token`) is opt-in and
+  intentionally coarse-grained.** It's one shared secret gating "can this
+  caller reach the server at all" on every route, checked once by shared
+  middleware before any handler runs — not a per-route or per-client ACL
+  system, and not a replacement for the per-identity token system above
+  ("who can act as which identity" stays that system's job). **Not built,
+  deliberately:** rate limiting/DoS protection, and any finer-grained
+  policy than the one shared token — both real, separate problems. A
+  `serve` instance left ungated (the default) behaves exactly as it always
+  has.
+- **Native TLS (`-tls-cert`/`-tls-key`) has no cert lifecycle behind it.**
+  No generation, no rotation, no ACME/Let's Encrypt integration — bring
+  your own cert (a self-signed one for testing, or one provisioned by
+  other means). For a real hosted deployment, a TLS-terminating reverse
+  proxy in front of plain-HTTP `serve` (Caddy, nginx, Cloudflare Tunnel, a
+  cloud load balancer) is still the recommended path; native TLS here is
+  for a quick, self-contained option, not a replacement for that.
 - **SSE reconnect does a full replay, not a resume.** `/stream/interest`
   has no durable cursor across a `serve` restart — a client that
   reconnects gets everything again from the start, not just what it

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -149,6 +151,79 @@ func statusForStoreError(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// ── server-wide access gate ─────────────────────────────────────────────
+//
+// A completely separate, coarser concern from identity-token verification
+// above: "can this caller reach the server at all," not "which identity is
+// this caller allowed to act as." Deliberately its own header, its own env
+// var, its own middleware -- see accessTokenHeader's doc comment for why it
+// cannot share Authorization: Bearer with the per-identity token.
+
+// accessTokenHeader carries the optional server-wide access token
+// (-access-token / STRATAGEMA_SERVER_ACCESS_TOKEN). It is NOT Authorization
+// -- that header is already claimed by per-identity token verification
+// (identitiesVerifyHandler, bearerToken, RemoteStore's Bearer header), and a
+// single request legitimately needs to carry both at once (e.g. a protected
+// identity's lock acquire against a gated server: one header proves "you
+// may reach this server," the other proves "you may act as this
+// identity"). Conflating the two into one header would make that
+// combination impossible to express.
+const accessTokenHeader = "X-Stratagema-Access-Token"
+
+// serverAccessTokenEnv is read by both cmdServe (the gate itself) and
+// newRemoteStore (the CLI's way of driving a gated server) -- named
+// distinctly from identity.go's STRATAGEMA_TOKEN, a completely different,
+// finer-grained concept (STRATAGEMA_TOKEN answers "which identity am I,"
+// this answers "am I allowed to talk to this server at all").
+const serverAccessTokenEnv = "STRATAGEMA_SERVER_ACCESS_TOKEN"
+
+// resolveServerAccessToken applies the same flag-overrides-env precedence
+// identity.go's resolveToken uses for the per-identity token: an explicit
+// non-empty -access-token flag wins; otherwise STRATAGEMA_SERVER_ACCESS_TOKEN.
+func resolveServerAccessToken(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return os.Getenv(serverAccessTokenEnv)
+}
+
+// requireAccessToken wraps next with the one shared server-wide gate,
+// applied once around the whole routing table (newGatedMux) rather than
+// copy-pasted per-handler -- scattering this per-route risks missing one,
+// which is exactly the gap this feature exists to close. An empty
+// accessToken is the default, opt-out case: passthrough, zero observable
+// difference from before this feature existed -- every route, including
+// the previously-open /health, /locks, and /stream/interest, behaves
+// exactly as it always has. When set, every request must carry the
+// matching value on accessTokenHeader or it's rejected 401 before next
+// (and therefore before any Store call, any body parse, anything) ever
+// runs. Compared with crypto/subtle.ConstantTimeCompare, not ==, matching
+// the existing identity-token comparison discipline (identity.go) --
+// avoiding the same timing side-channel for the same reason.
+func requireAccessToken(accessToken string, next http.Handler) http.Handler {
+	if accessToken == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		supplied := r.Header.Get(accessTokenHeader)
+		if subtle.ConstantTimeCompare([]byte(supplied), []byte(accessToken)) != 1 {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("missing or invalid %s header", accessTokenHeader))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// newGatedMux is newMux plus the one server-wide access gate wrapped around
+// it -- the actual handler cmdServe listens with. Kept separate from newMux
+// itself so every existing test that builds an ungated server via
+// newMux(store) directly (serve_test.go, remote_test.go) keeps working
+// unchanged; accessToken == "" here is exactly equivalent to using newMux's
+// result directly, which the backward-compat test proves.
+func newGatedMux(store *Store, accessToken string) http.Handler {
+	return requireAccessToken(accessToken, newMux(store))
 }
 
 // bearerToken reads the identity token off the standard Authorization:
@@ -607,7 +682,14 @@ func cmdServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
 	port := fs.Int("port", 7979, "port to listen on")
+	accessTokenFlag := fs.String("access-token", "", "require this value on every request's "+accessTokenHeader+" header (default: unset, i.e. every route unauthenticated exactly as before; also readable from "+serverAccessTokenEnv+")")
+	tlsCert := fs.String("tls-cert", "", "TLS certificate file path -- requires -tls-key too; native TLS is for a quick, self-contained listener (e.g. a self-signed cert for testing), not a replacement for a TLS-terminating reverse proxy in front of plain HTTP in production, see README")
+	tlsKey := fs.String("tls-key", "", "TLS private key file path -- requires -tls-cert too")
 	fs.Parse(args)
+
+	if (*tlsCert == "") != (*tlsKey == "") {
+		return die(1, "serve: -tls-cert and -tls-key must both be given, or neither (got -tls-cert=%q -tls-key=%q)", *tlsCert, *tlsKey)
+	}
 
 	// Always the real local store, never remote — a server dispatching to
 	// another server would just be a confusing proxy, not a real backend,
@@ -620,9 +702,18 @@ func cmdServe(args []string) int {
 	}
 	defer store.Close()
 
-	mux := newMux(store)
+	accessToken := resolveServerAccessToken(*accessTokenFlag)
+	handler := newGatedMux(store, accessToken)
+	useTLS := *tlsCert != ""
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
 	addr := fmt.Sprintf(":%d", *port)
-	fmt.Printf("stratagema serve  http://localhost%s\n\n", addr)
+	fmt.Printf("stratagema serve  %s://localhost%s\n\n", scheme, addr)
+	if accessToken != "" {
+		fmt.Printf("  access gate: every request requires %s: <token>\n\n", accessTokenHeader)
+	}
 	fmt.Println("  GET  /health                                    health check")
 	fmt.Println("  GET  /locks                                     JSON snapshot of active locks")
 	fmt.Println("  GET  /locks/get?resource=<name>                 one lock (null if free)")
@@ -650,11 +741,16 @@ func cmdServe(args []string) int {
 	fmt.Println("  POST /strategies/{id}/status                    {status: planning|active|observing|closed}")
 	fmt.Println("  GET  /stream/interest?identity=<id>             SSE stream of propagation deliveries for one identity")
 	fmt.Println()
-	fmt.Println("every command above works against -db=" + fmt.Sprintf("http://localhost%s", addr) + " from another process/machine — see README's \"Remote mode\"")
+	fmt.Println("every command above works against -db=" + fmt.Sprintf("%s://localhost%s", scheme, addr) + " from another process/machine — see README's \"Remote mode\"")
 	fmt.Println()
 	fmt.Println("ctrl-c to stop")
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if useTLS {
+		err = http.ListenAndServeTLS(addr, *tlsCert, *tlsKey, handler)
+	} else {
+		err = http.ListenAndServe(addr, handler)
+	}
+	if err != nil {
 		return die(1, "serve: %v", err)
 	}
 	return 0
