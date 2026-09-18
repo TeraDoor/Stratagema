@@ -846,12 +846,13 @@ func cmdStrategyNext(args []string) int {
 			other = append(other, l)
 		}
 	}
+	now := time.Now()
 	if len(linked) == 0 {
 		fmt.Println("  locks linked to this strategy: none")
 	} else {
 		fmt.Printf("  locks linked to this strategy (%d):\n", len(linked))
 		for _, l := range linked {
-			fmt.Printf("    %-24s  holder=%-20s  since=%s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339))
+			fmt.Printf("    %-24s  holder=%-20s  since=%s%s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339), leaseSuffix(l, now))
 		}
 	}
 
@@ -865,7 +866,7 @@ func cmdStrategyNext(args []string) int {
 			if l.StrategyID != "" {
 				otherStrategy = "strategy=" + l.StrategyID
 			}
-			fmt.Printf("    %-24s  holder=%-20s  since=%s  %s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339), otherStrategy)
+			fmt.Printf("    %-24s  holder=%-20s  since=%s  %s%s\n", l.Resource, l.HolderID, l.AcquiredAt.UTC().Format(time.RFC3339), otherStrategy, leaseSuffix(l, now))
 		}
 	}
 	return 0

@@ -60,7 +60,7 @@ func TestServeLocksEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIdentity: %v", err)
 	}
-	if _, err := s.AcquireLock("res", alpha.ID, "working on it", ""); err != nil {
+	if _, err := s.AcquireLock("res", alpha.ID, "working on it", "", 0); err != nil {
 		t.Fatalf("AcquireLock: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestServeStreamInterestDeliversLive(t *testing.T) {
 	if _, err := s.CreateInterest(beta.ID, "res", ""); err != nil {
 		t.Fatalf("CreateInterest: %v", err)
 	}
-	if _, err := s.AcquireLock("res", alpha.ID, "editing", ""); err != nil {
+	if _, err := s.AcquireLock("res", alpha.ID, "editing", "", 0); err != nil {
 		t.Fatalf("AcquireLock: %v", err)
 	}
 
