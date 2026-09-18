@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS strategies (
 CREATE TABLE IF NOT EXISTS strategy_events (
 	id          TEXT PRIMARY KEY,
 	strategy_id TEXT NOT NULL,
-	kind        TEXT NOT NULL, -- step_started | step_completed | finding | decision | reflection | resource_usage | external_signal
+	kind        TEXT NOT NULL, -- step_started | step_completed | finding | decision | reflection | resource_usage
 	identity_id TEXT NOT NULL,
 	note        TEXT NOT NULL,
 	ts          INTEGER NOT NULL
