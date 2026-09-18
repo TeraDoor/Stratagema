@@ -41,10 +41,15 @@ being described after the fact.
   prose below). The format was already usable by hand; this is scaffolding,
   listing, and viewing them without hand-editing files directly.
 
-Not yet done: a Planner that proposes a strategy from a one-line intent, a
-way for a strategy to stay open and keep collecting findings after
-whatever it built has shipped, and packaged releases / a versioned
-`v1.0.0` tag. Build from source for now.
+Not yet done: a Planner that proposes a strategy from a one-line intent, and
+a way for a strategy to stay open and keep collecting findings after
+whatever it built has shipped. Packaged releases are wired up — pushing a
+`v*` tag runs `.github/workflows/release.yml`, which cross-compiles
+linux/darwin/windows binaries and attaches checksummed archives to a
+GitHub Release (see [Releases](#releases) below) — but no real tag has
+been pushed through it yet, so that path is built and locally verified,
+not yet proven end-to-end on GitHub's infrastructure. Build from source
+until a `v1.0.0` (or earlier) tag actually goes out.
 
 **New here?** [`GETTING_STARTED.md`](GETTING_STARTED.md) walks through the
 one property this project has to get right — two agents, one resource,
@@ -88,6 +93,40 @@ in another terminal and `curl -sN "http://localhost:7979/stream/interest?identit
 - **No harness lock-in.** Talk to it from Claude Code, Codex, Pi, or a bare
   curl script from a shell — it does not care what is driving the agent on
   either end.
+
+## Releases
+
+`stratagema version` reports the real tag it was built from, stamped at
+build time — not a hardcoded string:
+
+```
+go build -ldflags "-X main.version=$(git describe --tags --always --dirty)" -o bin/stratagema .
+```
+
+A plain `go build -o bin/stratagema .` (no `-ldflags`) still works exactly
+as before and reports `stratagema 0.0.0-dev` — the local dev loop is
+unchanged.
+
+Pushing a tag matching `v*` runs `.github/workflows/release.yml`: it
+cross-compiles for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64,
+and windows/amd64 (no cgo anywhere in this module, so plain `GOOS`/`GOARCH`
+builds are enough — no cross-compiler toolchain needed), packages each as
+a `.tar.gz` (`.zip` on Windows) with the binary plus `README.md`/`LICENSE`,
+computes a `sha256` checksum per archive, and publishes all of it to a
+GitHub Release on that tag.
+
+To test the cross-compilation matrix locally before trusting a tag push,
+without any extra tooling:
+
+```
+for pair in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+  goos=${pair%/*}; goarch=${pair#*/}
+  out="/tmp/stratagema-$goos-$goarch"; [ "$goos" = windows ] && out="$out.exe"
+  GOOS=$goos GOARCH=$goarch CGO_ENABLED=0 go build -ldflags "-X main.version=test" -o "$out" .
+done
+```
+
+Each invocation should exit 0 and leave a binary at `$out`.
 
 ## Known limitations
 
