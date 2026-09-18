@@ -550,6 +550,7 @@ func cmdLockAcquire(args []string) int {
 	note := fs.String("note", "", "what you're about to do to it (shown to anyone denied, and to subscribers on release)")
 	strategy := fs.String("strategy", "", "strategy ID this acquire belongs to, from `strategy create` (optional — empty means unlinked)")
 	lease := fs.Int("lease", 0, "optional lease duration in seconds — omit for the default, no-expiry behavior; when set, the lock is reclaimable by anyone once renewed_at+lease is passed without a `lock renew`")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	if *resource == "" || *identity == "" {
@@ -563,6 +564,10 @@ func cmdLockAcquire(args []string) int {
 		return die(1, "lock acquire: %v", err)
 	}
 	defer store.Close()
+
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "lock acquire: %v", err)
+	}
 
 	l, err := store.AcquireLock(*resource, *identity, *note, *strategy, *lease)
 	if err != nil {
@@ -586,6 +591,7 @@ func cmdLockRenew(args []string) int {
 	dbFlag := dbPathFlag(fs)
 	resource := fs.String("resource", "", "name of the leased resource to renew (required)")
 	identity := fs.String("identity", "", "identity ID renewing the lock — must be the current holder (required)")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	if *resource == "" || *identity == "" {
@@ -596,6 +602,10 @@ func cmdLockRenew(args []string) int {
 		return die(1, "lock renew: %v", err)
 	}
 	defer store.Close()
+
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "lock renew: %v", err)
+	}
 
 	l, err := store.RenewLock(*resource, *identity)
 	if err != nil {
@@ -612,6 +622,7 @@ func cmdLockRelease(args []string) int {
 	identity := fs.String("identity", "", "identity ID releasing the lock (required)")
 	note := fs.String("note", "", "what changed — delivered to every subscribed interest")
 	force := fs.Bool("force", false, "release even if held by a different identity (logged as forced)")
+	token := tokenFlag(fs)
 	fs.Parse(args)
 
 	if *resource == "" || *identity == "" {
@@ -622,6 +633,10 @@ func cmdLockRelease(args []string) int {
 		return die(1, "lock release: %v", err)
 	}
 	defer store.Close()
+
+	if err := store.VerifyIdentityToken(*identity, resolveToken(*token)); err != nil {
+		return die(1, "lock release: %v", err)
+	}
 
 	if err := store.ReleaseLock(*resource, *identity, *note, *force); err != nil {
 		return die(1, "lock release: %v", err)

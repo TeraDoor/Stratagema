@@ -90,7 +90,8 @@ func (s *Store) migrate() error {
 CREATE TABLE IF NOT EXISTS identities (
 	id         TEXT PRIMARY KEY,
 	label      TEXT NOT NULL,
-	created_at INTEGER NOT NULL
+	created_at INTEGER NOT NULL,
+	token_hash TEXT -- optional: NULL = unprotected, today's exact behavior (no token ever required). Non-NULL = a sha256 hex digest of the one real secret this identity was given at creation; the secret itself is never stored.
 );
 
 CREATE TABLE IF NOT EXISTS locks (
