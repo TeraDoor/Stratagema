@@ -194,6 +194,16 @@ func resolveToken(flagVal string) string {
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
+// cmdIdentity deliberately does not special-case "-h"/"--help"/"help" as a
+// pseudo-subcommand -- confirmed intentional-by-precedent, not an oversight:
+// every other subcommand-group dispatcher in this codebase (lock, faculty,
+// strategy, interest) has the exact same shape, so "-h" here falls through
+// to the same unknown-subcommand error as any other bad subcommand. Actual
+// per-command help is still available two ways: `stratagema identity` alone
+// (len(args)==0 above) prints the same usage line, and `stratagema identity
+// create -h` / `identity list -h` get real flag-package-generated help,
+// since flag.ExitOnError intercepts -h before this switch ever sees it.
+// Only the top level (main.go) treats -h/--help/help as first-class.
 func cmdIdentity(args []string) int {
 	if len(args) == 0 {
 		fmt.Println("usage: stratagema identity <create|list> [flags]")
@@ -217,6 +227,15 @@ func cmdIdentityCreate(args []string) int {
 	protect := fs.Bool("protect", false, "generate a random secret token this identity must present (via -token or STRATAGEMA_TOKEN) for identity-scoped mutating actions; printed exactly once, never recoverable afterward")
 	fs.Parse(args)
 
+	// identity create takes no positional arguments -- everything is a flag.
+	// A leftover arg here almost always means a flag after it went unparsed
+	// (flag.Parse stops at the first non-flag token, see cli.go/strategy_e2e_test.go's
+	// own note on this), which would otherwise silently drop e.g. -protect
+	// instead of erroring. Catch it rather than pretend nothing was typed.
+	if fs.NArg() != 0 {
+		return die(2, "identity create: unexpected argument(s) %v -- this command takes no positional arguments; if you meant a flag, check it comes before any other argument (flags after a positional value are not parsed)", fs.Args())
+	}
+
 	if *label == "" {
 		return die(1, "identity create: -label is required")
 	}
@@ -231,7 +250,7 @@ func cmdIdentityCreate(args []string) int {
 		if err != nil {
 			return die(1, "identity create: %v", err)
 		}
-		fmt.Printf("created %s\n  label: %s\n", it.ID, it.Label)
+		fmt.Printf("created %s\n  label: %s\n", it.ID, escapeForSingleLineDisplay(it.Label))
 		return 0
 	}
 
@@ -239,7 +258,7 @@ func cmdIdentityCreate(args []string) int {
 	if err != nil {
 		return die(1, "identity create: %v", err)
 	}
-	fmt.Printf("created %s\n  label:     %s\n  protected: yes\n\n", it.ID, it.Label)
+	fmt.Printf("created %s\n  label:     %s\n  protected: yes\n\n", it.ID, escapeForSingleLineDisplay(it.Label))
 	fmt.Printf("token (save this now -- it will not be shown again, and cannot be recovered):\n\n  %s\n\n", token)
 	fmt.Printf("set STRATAGEMA_TOKEN=%s (preferred), or pass -token=<value> to any identity-scoped\ncommand, to act as %s.\n", token, it.ID)
 	return 0
@@ -260,6 +279,13 @@ func cmdIdentityList(args []string) int {
 	dbFlag := dbPathFlag(fs)
 	fs.Parse(args)
 
+	// Same reasoning as cmdIdentityCreate: no positional arguments are ever
+	// expected, so a leftover one is a sign a flag after it was silently
+	// dropped by flag.Parse, not a thing to ignore.
+	if fs.NArg() != 0 {
+		return die(2, "identity list: unexpected argument(s) %v -- this command takes no positional arguments; if you meant a flag, check it comes before any other argument (flags after a positional value are not parsed)", fs.Args())
+	}
+
 	store, err := openStore(*dbFlag)
 	if err != nil {
 		return die(1, "identity list: %v", err)
@@ -275,7 +301,7 @@ func cmdIdentityList(args []string) int {
 		return 0
 	}
 	for _, it := range ids {
-		fmt.Printf("%-20s  %-9s  %s\n", it.ID, displayProtected(it.Protected), it.Label)
+		fmt.Printf("%-20s  %-9s  %s\n", it.ID, displayProtected(it.Protected), escapeForSingleLineDisplay(it.Label))
 	}
 	return 0
 }
