@@ -473,6 +473,26 @@ func displayGroup(group string) string {
 	return group
 }
 
+// escapeForSingleLineDisplay guards against the exact class of bug a
+// durability pass already found and fixed once for lock resource names
+// (validResourceName): a free-text field that's allowed to contain literal
+// newlines -- name, thesis, group, and an event note are none of them
+// newline-rejected the way a resource name is -- would otherwise break the
+// one-row-per-line assumption `strategy list`/`show`/`next` and `usage`
+// all print under, splitting a single strategy or event across multiple
+// visual lines and orphaning whatever field printed after it. Only touches
+// a string that actually contains one; every already-existing single-line
+// value round-trips through this unchanged.
+func escapeForSingleLineDisplay(s string) string {
+	if !strings.ContainsAny(s, "\n\r") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\\n")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\n")
+	return s
+}
+
 func cmdStrategyList(args []string) int {
 	fs := flag.NewFlagSet("strategy list", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
@@ -506,7 +526,7 @@ func cmdStrategyList(args []string) int {
 		return 0
 	}
 	for _, st := range strategies {
-		fmt.Printf("%-22s  %-10s  %-9s  group=%-10s  created=%s\n", st.ID, st.Name, st.Status, displayGroup(st.Group), st.CreatedAt.UTC().Format(time.RFC3339))
+		fmt.Printf("%-22s  %-10s  %-9s  group=%-10s  created=%s\n", st.ID, escapeForSingleLineDisplay(st.Name), st.Status, escapeForSingleLineDisplay(displayGroup(st.Group)), st.CreatedAt.UTC().Format(time.RFC3339))
 	}
 	return 0
 }
@@ -533,10 +553,10 @@ func cmdStrategyShow(args []string) int {
 	if st == nil {
 		return die(1, "strategy show: strategy %s not found", rest[0])
 	}
-	fmt.Printf("%s  %s\n", st.ID, st.Name)
+	fmt.Printf("%s  %s\n", st.ID, escapeForSingleLineDisplay(st.Name))
 	fmt.Printf("  status:  %s\n", st.Status)
-	fmt.Printf("  thesis:  %s\n", st.Thesis)
-	fmt.Printf("  group:   %s\n", displayGroup(st.Group))
+	fmt.Printf("  thesis:  %s\n", escapeForSingleLineDisplay(st.Thesis))
+	fmt.Printf("  group:   %s\n", escapeForSingleLineDisplay(displayGroup(st.Group)))
 	fmt.Printf("  created: %s\n", st.CreatedAt.UTC().Format(time.RFC3339))
 	if st.ClosedAt != nil {
 		fmt.Printf("  closed:  %s\n", st.ClosedAt.UTC().Format(time.RFC3339))
@@ -552,7 +572,7 @@ func cmdStrategyShow(args []string) int {
 	}
 	fmt.Println("  events:")
 	for _, ev := range events {
-		fmt.Printf("    %s  %-15s  %-9s  by=%s  %s\n", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.Kind, ev.IdentityID, ev.Note)
+		fmt.Printf("    %s  %-15s  %-9s  by=%s  %s\n", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.Kind, ev.IdentityID, escapeForSingleLineDisplay(ev.Note))
 	}
 	return 0
 }
@@ -679,7 +699,7 @@ func cmdStrategyUsage(args []string) int {
 		if ev.Kind != "resource_usage" {
 			continue
 		}
-		rawLines = append(rawLines, fmt.Sprintf("    %s  %-15s  by=%s  %s", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.IdentityID, ev.Note))
+		rawLines = append(rawLines, fmt.Sprintf("    %s  %-15s  by=%s  %s", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.IdentityID, escapeForSingleLineDisplay(ev.Note)))
 
 		p, err := parseResourceUsageNote(ev.Note)
 		if err != nil {
@@ -823,9 +843,9 @@ func cmdStrategyNext(args []string) int {
 		return die(1, "strategy next: %v", err)
 	}
 
-	fmt.Printf("%s  %s\n", st.ID, st.Name)
+	fmt.Printf("%s  %s\n", st.ID, escapeForSingleLineDisplay(st.Name))
 	fmt.Printf("  status:  %s\n", st.Status)
-	fmt.Printf("  thesis:  %s\n", st.Thesis)
+	fmt.Printf("  thesis:  %s\n", escapeForSingleLineDisplay(st.Thesis))
 	fmt.Printf("  created: %s\n", st.CreatedAt.UTC().Format(time.RFC3339))
 	if st.ClosedAt != nil {
 		fmt.Printf("  closed:  %s\n", st.ClosedAt.UTC().Format(time.RFC3339))
@@ -841,7 +861,7 @@ func cmdStrategyNext(args []string) int {
 		}
 		fmt.Printf("  recent events (%d of %d total, %s):\n", len(recent), len(all), cutoff)
 		for _, ev := range recent {
-			fmt.Printf("    %s  %-15s  %-9s  by=%s  %s\n", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.Kind, ev.IdentityID, ev.Note)
+			fmt.Printf("    %s  %-15s  %-9s  by=%s  %s\n", ev.Ts.UTC().Format(time.RFC3339), ev.ID, ev.Kind, ev.IdentityID, escapeForSingleLineDisplay(ev.Note))
 		}
 	}
 
