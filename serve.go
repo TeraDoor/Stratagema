@@ -241,11 +241,23 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
+// maxRequestBodyBytes caps every mutating route's request body. Every
+// payload this server actually accepts is a handful of short strings/ints
+// (a label, a note, a resource name) -- 1 MiB is generous headroom for
+// that, not a tight fit. Before this cap existed, decodeBody read r.Body
+// straight into json.NewDecoder with nothing bounding it at all: a client
+// (buggy or adversarial) could stream an unbounded body at any mutating
+// route and the server would read every byte before ever producing a 400,
+// a real resource-exhaustion gap on a network-facing surface.
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
+
 // decodeBody parses r's JSON body into v, closing the body when done. A
 // GET request with query params instead of a body (AcknowledgePropagation)
-// never calls this.
-func decodeBody(r *http.Request, v any) error {
+// never calls this. w is only used to cap the read via http.MaxBytesReader
+// (see maxRequestBodyBytes) -- it never itself writes a response.
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
@@ -268,7 +280,7 @@ func locksGetHandler(store *Store) http.HandlerFunc {
 func locksAcquireHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req acquireLockRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -288,7 +300,7 @@ func locksAcquireHandler(store *Store) http.HandlerFunc {
 func locksReleaseHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req releaseLockRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -307,7 +319,7 @@ func locksReleaseHandler(store *Store) http.HandlerFunc {
 func locksRenewHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req renewLockRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -338,7 +350,7 @@ func identitiesListHandler(store *Store) http.HandlerFunc {
 func identitiesCreateHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req labelRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -358,7 +370,7 @@ func identitiesCreateHandler(store *Store) http.HandlerFunc {
 func identitiesCreateProtectedHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req labelRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -386,7 +398,7 @@ func identitiesCreateProtectedHandler(store *Store) http.HandlerFunc {
 func identitiesVerifyHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req verifyIdentityRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -416,7 +428,7 @@ func interestsListHandler(store *Store) http.HandlerFunc {
 func interestsCreateHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createInterestRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -437,7 +449,7 @@ func interestsSetStatusHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req statusRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -513,7 +525,7 @@ func strategiesListHandler(store *Store) http.HandlerFunc {
 func strategiesCreateHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createStrategyRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -566,7 +578,7 @@ func strategiesEventsRecentHandler(store *Store) http.HandlerFunc {
 func strategiesLogEventHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req logStrategyEventRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -586,7 +598,7 @@ func strategiesLogEventHandler(store *Store) http.HandlerFunc {
 func strategiesCloseHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req closeStrategyRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -605,7 +617,7 @@ func strategiesCloseHandler(store *Store) http.HandlerFunc {
 func strategiesGroupHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req groupRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
@@ -620,7 +632,7 @@ func strategiesGroupHandler(store *Store) http.HandlerFunc {
 func strategiesStatusHandler(store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req statusRequest
-		if err := decodeBody(r, &req); err != nil {
+		if err := decodeBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("malformed request body: %w", err))
 			return
 		}
