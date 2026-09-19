@@ -6,6 +6,40 @@ import (
 	"os/exec"
 )
 
+// maxCapturedOutputBytes bounds how much of a harness's stdout/stderr this
+// runner will ever hold in memory. Before this cap existed, cmd.Stdout and
+// cmd.Stderr pointed straight at a plain, unbounded bytes.Buffer:
+// truncateForNote (main.go) only trims the *note* text built afterward, so
+// a harness that actually wrote many MB of output was fully read into
+// memory first -- a real unbounded-memory read, not just an unbounded
+// logged note. Capped well above maxEventNoteBytes so the note text this
+// produces is identical to the old unbounded behavior in every case that
+// matters: truncateForNote never looks past maxEventNoteBytes anyway, so
+// bytes beyond this cap were always going to be discarded by the time a
+// note gets built -- they just used to sit in memory first.
+const maxCapturedOutputBytes = maxEventNoteBytes * 4
+
+// boundedWriter accepts up to limit bytes and silently drops the rest,
+// always reporting a full write to its caller. os/exec's own stdout/stderr
+// copy goroutine treats a write error as a reason to stop copying (and can
+// trip a SIGPIPE on the child's side) -- a capture buffer that's simply
+// full should never cause that.
+type boundedWriter struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	if room := w.limit - w.buf.Len(); room > 0 {
+		if len(p) < room {
+			w.buf.Write(p)
+		} else {
+			w.buf.Write(p[:room])
+		}
+	}
+	return len(p), nil
+}
+
 // harnessResult is everything runHarness actually observed about one
 // invocation: the real exit code (the load-bearing signal -- see main.go's
 // package doc comment), and the captured output used to build the
@@ -42,12 +76,13 @@ type harnessResult struct {
 // this first slice and is explicitly left as future scope (see README).
 func runHarness(harnessCmd, prompt string) harnessResult {
 	cmd := exec.Command("sh", "-c", harnessCmd+` "$@"`, "sh", prompt)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &boundedWriter{limit: maxCapturedOutputBytes}
+	stderr := &boundedWriter{limit: maxCapturedOutputBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
-	res := harnessResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
+	res := harnessResult{stdout: stdout.buf.Bytes(), stderr: stderr.buf.Bytes()}
 	if err == nil {
 		res.exitCode = 0
 		return res
