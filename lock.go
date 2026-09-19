@@ -65,7 +65,22 @@ func (l *Lock) Expired(now time.Time) bool {
 	if l.LeaseSeconds <= 0 || l.RenewedAt == nil {
 		return false
 	}
-	return now.Sub(*l.RenewedAt) >= time.Duration(l.LeaseSeconds)*time.Second
+	// Deliberately millisecond arithmetic (matching reclaimExpiredLock's
+	// SQL WHERE clause bit-for-bit: "(? - renewed_at) >= (lease_seconds *
+	// 1000)"), not now.Sub(*l.RenewedAt) >= time.Duration(l.LeaseSeconds)*
+	// time.Second: time.Duration is nanoseconds in an int64, which
+	// overflows once LeaseSeconds*1e9 exceeds ~292 years -- an ordinary Go
+	// int, and therefore an ordinary JSON lease_seconds a remote caller can
+	// send, easily exceeds that. Confirmed for real: a lease acquired with
+	// LeaseSeconds=9_300_000_000 (~294.7 years) read back as already
+	// Expired the instant it was acquired. Working in the same
+	// milliseconds-since-epoch units the SQL side already uses has no such
+	// ceiling for any real lease and, just as importantly, keeps this
+	// read-path check and the write-path reclaim condition computing the
+	// exact same thing -- switching to whole-seconds precision instead
+	// would have fixed the overflow but opened a new, narrower mismatch
+	// between the two.
+	return now.UnixMilli()-l.RenewedAt.UnixMilli() >= int64(l.LeaseSeconds)*1000
 }
 
 // leaseState renders Expired as the two-word vocabulary every display path
@@ -242,6 +257,18 @@ func (s *Store) recordLockEvent(resource, kind, identityID, holderID, note, stra
 func (s *Store) AcquireLock(resource, identityID, note, strategyID string, leaseSeconds int) (*Lock, error) {
 	if err := validResourceName(resource); err != nil {
 		return nil, err
+	}
+	// cmdLockAcquire rejects a negative -lease before this is ever called,
+	// but that's a CLI-only screen: locksAcquireHandler (serve.go) calls
+	// AcquireLock directly off a JSON body with no equivalent check, so a
+	// remote-coordinator caller can send lease_seconds:-1 straight over the
+	// wire. Without this, leaseColumns' own "<=0 means no lease" rule would
+	// silently downgrade that to an unbounded, never-expiring lock instead
+	// of reporting the caller's mistake -- a materially different, and
+	// wrong, outcome. Enforced here so every entry point gets it, not just
+	// the CLI's.
+	if leaseSeconds < 0 {
+		return nil, fmt.Errorf("lock acquire: lease must not be negative")
 	}
 	if strategyID != "" {
 		st, err := s.GetStrategy(strategyID)
