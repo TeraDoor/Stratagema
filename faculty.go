@@ -61,6 +61,29 @@ func missingFieldError(key string) error {
 	return fmt.Errorf("missing required frontmatter field %q", key)
 }
 
+// validFacultyName guards the one place a user-supplied name is turned
+// directly into a file path (faculty create's -name, faculty show's
+// positional name): filepath.Join does not stop a path-separator-bearing
+// name from walking outside the faculties directory. Verified directly —
+// before this check existed, `faculty create -name=../evil` wrote
+// evil.md one directory above the intended faculties dir, not inside it.
+// Same "reject the dangerous characters at the one point a name is first
+// written" pattern as validResourceName in lock.go, adapted for a
+// filesystem name rather than a database column: a bare ".." or "."
+// is harmless here (the ".md" suffix this name is always joined with
+// turns it into "...md" / "..md", an ordinary filename, not a parent-dir
+// token), so only an embedded separator — the thing that can introduce a
+// new, standalone ".." path segment — needs rejecting.
+func validFacultyName(name string) error {
+	if name == "" {
+		return fmt.Errorf("faculty name must not be empty")
+	}
+	if strings.ContainsAny(name, "/\\") || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("faculty name must not contain a path separator: %q", name)
+	}
+	return nil
+}
+
 // ParseFaculty hand-parses exactly the frontmatter subset this project
 // actually uses: a --- delimited block of flat "key: value" lines, where
 // one key (tools) has a bracketed list value like [a, b, c], followed by a
@@ -232,6 +255,9 @@ func cmdFacultyCreate(args []string) int {
 	if *name == "" || *capability == "" || *harness == "" || *tools == "" {
 		return die(1, "faculty create: -name, -capability, -harness, and -tools are all required")
 	}
+	if err := validFacultyName(*name); err != nil {
+		return die(1, "faculty create: %v", err)
+	}
 
 	toolList := strings.Split(*tools, ",")
 	for i, t := range toolList {
@@ -337,6 +363,9 @@ func cmdFacultyShow(args []string) int {
 		return die(1, "faculty show: exactly one faculty name is required, e.g. `stratagema faculty show builder`")
 	}
 	name := rest[0]
+	if err := validFacultyName(name); err != nil {
+		return die(1, "faculty show: %v", err)
+	}
 
 	dir := resolveFacultiesDir(*dirFlag)
 	path := filepath.Join(dir, name+".md")
