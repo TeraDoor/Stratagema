@@ -266,8 +266,17 @@ func (s *Store) ListPropagationsForIdentity(identityID string, pendingOnly bool)
 }
 
 // RecentPropagationsForIdentity is the SSE polling primitive: everything
-// delivered to identityID with rowid > lastRowID, oldest first.
+// delivered to identityID with rowid > lastRowID, oldest first, up to
+// limit rows. A negative limit is clamped to 0 rather than passed through
+// to SQLite: SQLite's own LIMIT semantics treat a negative value as "no
+// upper bound," which would silently turn this bounded polling primitive
+// into an unbounded dump for any caller (or malformed HTTP query) that
+// passes one -- confirmed directly, not assumed, since that's exactly the
+// kind of surprise this codebase's "verify, don't assume" rule exists for.
 func (s *Store) RecentPropagationsForIdentity(identityID string, lastRowID int64, limit int) ([]PropagationDelivery, int64, error) {
+	if limit < 0 {
+		limit = 0
+	}
 	q := `SELECT ` + deliveryColumns + ` FROM propagations p JOIN lock_events le ON le.id = p.lock_event_id
 	      WHERE p.identity_id = ? AND p.rowid > ? ORDER BY p.rowid ASC LIMIT ?`
 	rows, err := s.db.Query(q, identityID, lastRowID, limit)
