@@ -309,6 +309,27 @@ here rather than left for someone to discover:
 - **No schema-version check.** Two binary versions with an incompatible
   schema sharing one database file isn't detected or prevented — keep
   the binary in sync across every process touching the same database.
+  Empirically confirmed (not just architecturally assumed) that the two
+  mismatch directions fail differently, and neither is silent
+  corruption: an **older binary opening a database a newer binary
+  already wrote grown columns into** (e.g. `lease_seconds`/`strategy_id`
+  on `locks`, `token_hash` on `identities`) opens and keeps working —
+  `migrate()`'s `CREATE TABLE IF NOT EXISTS` never touches an existing
+  table, so the old binary's own, smaller queries never even reference
+  the columns it doesn't know about — but it is blind to any semantics
+  those columns carry: it cannot see an expired lease and will refuse
+  forever to reclaim a resource a current binary would correctly free.
+  A **newer binary opening an older, smaller-schema database** fails
+  loudly instead: every current `INSERT`/`SELECT` in this codebase
+  names the grown columns unconditionally, so the very first read or
+  write against the old schema returns a plain `no such column`/`has no
+  column named` SQL error and a clean non-zero exit — never a partial
+  write, a crash, or quietly-wrong data. Net: downgrading a binary
+  against a newer database is the dangerous direction (silent staleness
+  on lease-aware resources); upgrading is the safe one (loud, immediate
+  failure). Still not detected or prevented either way — the fix
+  remains "keep the binary in sync," a real, separate feature (schema
+  versioning) this project deliberately doesn't have.
 
 ## `stratagema-runner`: a separate tool that actually launches a harness
 
