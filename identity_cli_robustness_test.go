@@ -466,9 +466,9 @@ func TestIdentityCreateDuplicateFlagLastWins(t *testing.T) {
 	if !strings.Contains(out, "label: second") {
 		t.Fatalf("duplicate -label: want the later value (\"second\") to win, got:\n%s", out)
 	}
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	defer s.Close()
 	all, err := s.ListIdentities()
@@ -496,9 +496,9 @@ func TestIdentityCreateFlagValueLooksLikeAnotherFlag(t *testing.T) {
 	if !strings.Contains(out, "label: -protect") {
 		t.Fatalf("want the literal label \"-protect\" preserved, got:\n%s", out)
 	}
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	defer s.Close()
 	all, err := s.ListIdentities()
@@ -547,9 +547,9 @@ func TestIdentityCreateTrailingPositionalArgRejected(t *testing.T) {
 // was actually silently answering "what's in the default db instead."
 func TestIdentityListTrailingPositionalArgRejected(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	if _, err := s.CreateIdentity("should-not-be-silently-hidden"); err != nil {
 		t.Fatalf("CreateIdentity: %v", err)
@@ -702,7 +702,7 @@ func TestDBPathUnwritableDirectoryErrorsCleanly(t *testing.T) {
 // TestDBPathRelativeVsAbsoluteFromDifferentWorkingDirectories confirms both
 // a relative and an absolute -db path resolve to the same file regardless
 // of the process's current working directory -- relative to cwd (the
-// standard os/filepath contract openLocalStore relies on with no special
+// standard os/filepath contract openStore relies on with no special
 // handling of its own), absolute unconditionally.
 func TestDBPathRelativeVsAbsoluteFromDifferentWorkingDirectories(t *testing.T) {
 	root := t.TempDir()

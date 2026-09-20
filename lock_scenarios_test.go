@@ -231,12 +231,11 @@ func TestResourceNameSQLInjectionShapedStringsAreSafe(t *testing.T) {
 
 // TestAcquireLockRejectsNegativeLeaseDirectly is the check this project's
 // own history says is worth doing: cmdLockAcquire's CLI flag parser
-// already rejects -lease<0 before it ever reaches AcquireLock, but
-// serve.go's locksAcquireHandler calls store.AcquireLock directly off a
-// JSON body with no such check (confirmed by reading serve.go) -- a remote
-// coordinator caller can send lease_seconds:-1 straight over the wire and
-// bypass the CLI's validation entirely. This proves what AcquireLock
-// itself actually does with a negative value when nothing upstream has
+// already rejects -lease<0 before it ever reaches AcquireLock, but nothing
+// stops a caller going through Store's Go API directly (as this test does)
+// from passing lease_seconds:-1 and bypassing the CLI's validation
+// entirely. This proves what AcquireLock itself actually does with a
+// negative value when nothing upstream has
 // screened it out.
 func TestAcquireLockRejectsNegativeLeaseDirectly(t *testing.T) {
 	s := newTestStore(t)
@@ -316,8 +315,8 @@ func TestLeaseVeryLargeValueDoesNotOverflowExpiryArithmetic(t *testing.T) {
 // time.Duration(l.LeaseSeconds)*time.Second, and time.Duration is a signed
 // int64 count of *nanoseconds* -- its range tops out around 292 years. A
 // leaseSeconds value comfortably representable as a plain Go int (and
-// therefore as a JSON lease_seconds field a remote caller can send) but
-// past that ~292-year nanosecond ceiling silently overflows the
+// therefore something any caller of Store's Go API can pass) but past
+// that ~292-year nanosecond ceiling silently overflows the
 // multiplication. This test proves, by actually running it, whether that
 // overflow makes a lease that was *just* acquired read back as already
 // expired -- the opposite of what the caller asked for, and a real
@@ -418,9 +417,9 @@ func TestConcurrentReclaimOfExpiredLeaseHasExactlyOneWinner(t *testing.T) {
 	// direct Store handle so the exact same on-disk DB is ready before any
 	// racer process starts. Closed before the race begins so it can't hold
 	// any lingering connection open against the racers.
-	setup, err := openLocalStore(db)
+	setup, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	if _, err := setup.AcquireLock("race", "orig-holder", "orig's step", "", 3); err != nil {
 		setup.Close()
@@ -481,7 +480,7 @@ func TestConcurrentReclaimOfExpiredLeaseHasExactlyOneWinner(t *testing.T) {
 	}
 
 	// Exactly one "reclaimed" event, ever, on the audit trail.
-	final, err := openLocalStore(db)
+	final, err := openStore(db)
 	if err != nil {
 		t.Fatalf("re-opening db to inspect events: %v", err)
 	}

@@ -234,9 +234,9 @@ func TestSSENonexistentIdentityStreamsEmptyNotError(t *testing.T) {
 // the test passes only if that first identity's delivery actually arrives,
 // which it can only do if the handler used the first value.
 func TestSSEMultipleIdentityQueryParamsFirstWins(t *testing.T) {
-	s, err := openLocalStore(filepath.Join(t.TempDir(), "test.db"))
+	s, err := openStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	defer s.Close()
 
@@ -319,9 +319,9 @@ func TestSSEMultipleIdentityQueryParamsFirstWins(t *testing.T) {
 // lastRowID cursor correctly continues across multiple poll ticks instead
 // of losing anything past the first page.
 func TestSSEDeliveryOrderAndCompletenessUnderConcurrentLoad(t *testing.T) {
-	s, err := openLocalStore(filepath.Join(t.TempDir(), "test.db"))
+	s, err := openStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	defer s.Close()
 

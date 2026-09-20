@@ -259,14 +259,13 @@ func (s *Store) AcquireLock(resource, identityID, note, strategyID string, lease
 		return nil, err
 	}
 	// cmdLockAcquire rejects a negative -lease before this is ever called,
-	// but that's a CLI-only screen: locksAcquireHandler (serve.go) calls
-	// AcquireLock directly off a JSON body with no equivalent check, so a
-	// remote-coordinator caller can send lease_seconds:-1 straight over the
-	// wire. Without this, leaseColumns' own "<=0 means no lease" rule would
-	// silently downgrade that to an unbounded, never-expiring lock instead
-	// of reporting the caller's mistake -- a materially different, and
-	// wrong, outcome. Enforced here so every entry point gets it, not just
-	// the CLI's.
+	// but that's a CLI-only screen: any other caller of Store's Go API can
+	// call AcquireLock directly with no equivalent check, passing
+	// leaseSeconds:-1 straight through. Without this, leaseColumns' own
+	// "<=0 means no lease" rule would silently downgrade that to an
+	// unbounded, never-expiring lock instead of reporting the caller's
+	// mistake -- a materially different, and wrong, outcome. Enforced here
+	// so every entry point gets it, not just the CLI's.
 	if leaseSeconds < 0 {
 		return nil, fmt.Errorf("lock acquire: lease must not be negative")
 	}

@@ -24,78 +24,9 @@ func defaultDBPath() string {
 	return filepath.Join(".stratagema", "events.db")
 }
 
-// Coordinator is the exact method set every CLI command calls on a store —
-// formalizing an existing set, not designing a new one: every method below
-// was already a *Store method before this interface existed (verified with
-// `grep -ohE '\bstore\.[A-Z][A-Za-z]*\(' *.go | grep -v _test.go | sort -u`
-// in this repo). *Store satisfies it with zero changes to Store itself.
-// RemoteStore (remote.go) is the other implementation, talking to a running
-// `stratagema serve` over HTTP/JSON instead of a local SQLite file —
-// openStore, below, is the single place that decides which one a caller
-// gets, so every cmd* function stays unaware which backend it's actually
-// talking to.
-type Coordinator interface {
-	AcknowledgePropagation(id string) error
-	AcquireLock(resource, identityID, note, strategyID string, leaseSeconds int) (*Lock, error)
-	Close() error
-	CloseStrategy(id, identityID, outcome string) error
-	CreateIdentity(label string) (*Identity, error)
-	CreateInterest(identityID, resource, label string) (*Interest, error)
-	CreateProtectedIdentity(label string) (*Identity, string, error)
-	CreateStrategy(name, thesis string) (*Strategy, error)
-	GetLock(resource string) (*Lock, error)
-	GetStrategy(id string) (*Strategy, error)
-	ListIdentities() ([]*Identity, error)
-	ListInterests() ([]*Interest, error)
-	ListLocks() ([]*Lock, error)
-	ListPropagationsForIdentity(identityID string, pendingOnly bool) ([]PropagationDelivery, error)
-	ListStrategies() ([]*Strategy, error)
-	ListStrategyEvents(strategyID string) ([]*StrategyEvent, error)
-	LogStrategyEvent(strategyID, identityID, kind, note string) (*StrategyEvent, error)
-	RecentPropagationsForIdentity(identityID string, lastRowID int64, limit int) ([]PropagationDelivery, int64, error)
-	RecentStrategyEvents(strategyID string) ([]*StrategyEvent, error)
-	ReleaseLock(resource, identityID, note string, force bool) error
-	RenewLock(resource, identityID string) (*Lock, error)
-	SetInterestStatus(id, status string) error
-	SetStrategyGroup(id, group string) error
-	SetStrategyStatus(id, status string) error
-	VerifyIdentityToken(identityID, token string) error
-}
-
-// remoteDBPrefixes are the two schemes that route openStore at a running
-// `stratagema serve` instance instead of a local file — anything else is
-// treated as a local SQLite path, unchanged.
-var remoteDBPrefixes = []string{"http://", "https://"}
-
-func isRemoteDBPath(path string) bool {
-	for _, p := range remoteDBPrefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// openStore is the single dispatch point every cmd* function calls: a
-// "-db"/path value that looks like a URL gets a RemoteStore talking HTTP/JSON
-// to a running `stratagema serve`; everything else gets exactly today's
-// local SQLite path, via openLocalStore, completely unchanged. Everything
-// downstream only ever sees the Coordinator interface, so no cmd* function
-// needs to know or care which one it got.
-func openStore(path string) (Coordinator, error) {
-	if isRemoteDBPath(path) {
-		return newRemoteStore(path), nil
-	}
-	return openLocalStore(path)
-}
-
-// openLocalStore is today's original openStore, unchanged: it always opens
-// a local SQLite file, never dispatches to remote. cmdServe calls this
-// directly (the server itself is always the real local store, never remote —
-// see remote.go's doc comment), and so does every test that needs the
-// concrete *Store type (e.g. to pass to newMux, or to reach into the raw db
-// for a durability check).
-func openLocalStore(path string) (*Store, error) {
+// openStore always opens a local SQLite file — the one and only way a
+// *Store gets created.
+func openStore(path string) (*Store, error) {
 	if path == "" {
 		path = defaultDBPath()
 	}

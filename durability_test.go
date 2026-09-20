@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -92,7 +91,7 @@ func TestConcurrentFreshDatabaseCreationGrownSchema(t *testing.T) {
 
 	// Confirm the schema that actually landed is the real, full, grown
 	// one -- not a partial table set from a racer that lost mid-CREATE.
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
 		t.Fatalf("opening the raced-into-existence db afterward: %v", err)
 	}
@@ -133,92 +132,7 @@ func TestConcurrentFreshDatabaseCreationGrownSchema(t *testing.T) {
 	assertIntegrityOK(t, db)
 }
 
-// ── 2. WAL/busy-timeout under a new concurrency shape: many goroutines,  ──
-// ── one process, one *sql.DB, driven over real HTTP (the serve.go shape) ─
-
-// TestConcurrentHTTPWritesSharedDBHandle is the concurrency pattern the
-// original durability pass never exercised, because `serve.go` didn't
-// exist yet: many goroutines inside *one* long-lived process, sharing
-// *one* *sql.DB connection pool, each triggering a real SQLite write via
-// real HTTP requests (net/http's per-request-goroutine model) rather than
-// each writer being its own OS process with its own handle. Uses the real
-// RemoteStore/newMux pair -- an actual HTTP round trip per write, not a
-// direct Go call into the Store.
-func TestConcurrentHTTPWritesSharedDBHandle(t *testing.T) {
-	s := newTestStore(t)
-	srv := httptest.NewServer(newMux(s))
-	defer srv.Close()
-	rs := newRemoteStore(srv.URL)
-	defer rs.Close()
-
-	const n = 60
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	start := make(chan struct{})
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			// Distinct resource per goroutine -- this half of the test
-			// is about the pool/handle surviving heavy concurrent
-			// *uncontended* write traffic, not lock semantics.
-			_, err := rs.AcquireLock(fmt.Sprintf("http-res-%d", i), fmt.Sprintf("http-agent-%d", i), "concurrent http write", "", 0)
-			errs[i] = err
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil {
-			t.Errorf("goroutine %d: AcquireLock over HTTP against the shared *sql.DB failed: %v", i, err)
-		}
-	}
-	locks, err := s.ListLocks()
-	if err != nil {
-		t.Fatalf("ListLocks: %v", err)
-	}
-	if len(locks) != n {
-		t.Fatalf("want %d locks landed via %d concurrent HTTP writers sharing one *sql.DB, got %d", n, n, len(locks))
-	}
-
-	// Now the contended case, same shape: n goroutines racing over real
-	// HTTP for the *same* resource against the same shared handle --
-	// TestConcurrentAcquireHasExactlyOneWinner's property, but for the
-	// in-process-goroutines-over-HTTP shape instead of separate processes.
-	const m = 30
-	var wg2 sync.WaitGroup
-	codes := make([]int, m)
-	start2 := make(chan struct{})
-	for i := 0; i < m; i++ {
-		wg2.Add(1)
-		go func(i int) {
-			defer wg2.Done()
-			<-start2
-			_, err := rs.AcquireLock("http-contended", fmt.Sprintf("http-contender-%d", i), "", "", 0)
-			if err == nil {
-				codes[i] = 0
-			} else {
-				codes[i] = 1
-			}
-		}(i)
-	}
-	close(start2)
-	wg2.Wait()
-
-	wins := 0
-	for _, c := range codes {
-		if c == 0 {
-			wins++
-		}
-	}
-	if wins != 1 {
-		t.Fatalf("want exactly 1 winner among %d goroutines racing over HTTP for one resource against one shared *sql.DB, got %d", m, wins)
-	}
-}
-
-// ── 3. Disk-full re-test under the grown schema, real ulimit -f ──────────
+// ── 2. Disk-full re-test under the grown schema, real ulimit -f ──────────
 
 // TestDiskFullLeaseStrategyLinkedLockFailsCleanly re-runs the original
 // pass's ulimit -f disk-full check (ledger/071 in the sibling boat repo:
@@ -299,7 +213,7 @@ func TestDiskFullLeaseStrategyLinkedLockFailsCleanly(t *testing.T) {
 	assertIntegrityOK(t, db)
 }
 
-// ── 4. A genuinely new scenario: sustained mixed real usage, PRAGMA health ──
+// ── 3. A genuinely new scenario: sustained mixed real usage, PRAGMA health ──
 
 // TestSustainedMixedWorkloadIntegrityStaysClean is the scenario the
 // original pass never covered: hundreds of real operations spread across
@@ -310,9 +224,9 @@ func TestDiskFullLeaseStrategyLinkedLockFailsCleanly(t *testing.T) {
 // an issue in.
 func TestSustainedMixedWorkloadIntegrityStaysClean(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "mixed-workload.db")
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 
 	const rounds = 250
@@ -402,7 +316,7 @@ func TestSustainedMixedWorkloadIntegrityStaysClean(t *testing.T) {
 	assertIntegrityOK(t, db)
 }
 
-// ── 5. Schema-version mismatch: empirical fact-finding, not a fix ────────
+// ── 4. Schema-version mismatch: empirical fact-finding, not a fix ────────
 //
 // README's "Known limitations" already names this gap honestly ("No
 // schema-version check... keep the binary in sync"). These two tests
@@ -516,12 +430,12 @@ func TestSchemaMismatchNewBinaryAgainstOldSchema(t *testing.T) {
 		t.Fatalf("closing raw legacy db: %v", err)
 	}
 
-	// Today's real openLocalStore/migrate() against that file: migrate()
+	// Today's real openStore/migrate() against that file: migrate()
 	// itself must not fail (CREATE TABLE IF NOT EXISTS is a true no-op on
 	// tables that already exist -- confirmed, not assumed).
-	s, err := openLocalStore(dbPath)
+	s, err := openStore(dbPath)
 	if err != nil {
-		t.Fatalf("today's openLocalStore against a legacy-schema db: want a clean open (migrate() should no-op on existing tables), got: %v", err)
+		t.Fatalf("today's openStore against a legacy-schema db: want a clean open (migrate() should no-op on existing tables), got: %v", err)
 	}
 	defer s.Close()
 
@@ -552,8 +466,8 @@ func TestSchemaMismatchNewBinaryAgainstOldSchema(t *testing.T) {
 	}
 
 	// And the CLI's own extra pre-check (VerifyIdentityToken, run before
-	// AcquireLock by cmdLockAcquire/locksAcquireHandler) fails the exact
-	// same loud way, one step earlier, because it SELECTs token_hash.
+	// AcquireLock by cmdLockAcquire) fails the exact same loud way, one
+	// step earlier, because it SELECTs token_hash.
 	if err := s.VerifyIdentityToken("brand-new-identity", ""); err == nil {
 		t.Fatalf("want VerifyIdentityToken against a legacy identities table to fail cleanly (no token_hash column there), got no error")
 	} else if !isSchemaMismatchSQLError(err) {

@@ -48,12 +48,6 @@ being described after the fact.
   agent-role definition (a markdown file: settings up top, behavior in
   prose below). The format was already usable by hand; this is scaffolding,
   listing, and viewing them without hand-editing files directly.
-- **Remote coordination** — every command's `-db` flag also accepts
-  `http://host:port`/`https://host:port`, talking to a running `stratagema
-  serve` over HTTP/JSON instead of opening a local SQLite file. This is
-  what makes `serve` an actual hosted coordinator two agents on two
-  different machines can share, not just a read-only dashboard over one
-  process's local file. See "Remote mode" below.
 
 Not yet done: a Planner that proposes a strategy from a one-line intent, and
 a way for a strategy to stay open and keep collecting findings after
@@ -95,115 +89,12 @@ $BIN lock acquire -db=$DB -resource=shared-config -identity=$beta  # now succeed
 For live push instead of polling `inbox`, run `stratagema serve -db=$DB`
 in another terminal and `curl -sN "http://localhost:7979/stream/interest?identity=$beta"`.
 
-## Remote mode: coordinating across machines
-
-Every command's `-db` flag accepts a URL (`http://` or `https://`), not just
-a local file path — this is what makes `serve` an actual hosted coordinator
-instead of a read-only dashboard. Run `stratagema serve -db=$DB` on one
-machine, then point any other process at it exactly like a local file:
-
-```
-# machine/process A: the coordinator
-stratagema serve -db=./events.db -port=7979
-
-# machine/process B (or a second terminal on the same one)
-stratagema identity create -db=http://coordinator-host:7979 -label=agent-remote
-stratagema lock acquire    -db=http://coordinator-host:7979 -resource=shared-config -identity=$id -note=editing
-stratagema strategy create -db=http://coordinator-host:7979 -name=... -thesis=...
-```
-
-Every subcommand works identically either way — `-db=./file.db` and
-`-db=http://host:port` are interchangeable everywhere a database path is
-accepted, because `openStore` (`store.go`) is the single place that decides
-which one a given value means; nothing downstream of it knows or cares.
-Internally this is `RemoteStore` (`remote.go`), a second implementation of
-the same `Coordinator` interface `*Store` already satisfies, talking
-HTTP/JSON to the routes `serve` exposes (`serve.go`'s `newMux`) — `stratagema
-serve`'s own startup output prints the full route table.
-
-**Auth over the wire** is now two independent, both opt-in layers:
-
-- *Per-identity token verification* (unchanged from before): a protected
-  identity (`identity create -protect`) works the same way remotely as
-  locally — `-token=`/`STRATAGEMA_TOKEN` is checked via `POST
-  /identities/verify`, which reads the token from a standard
-  `Authorization: Bearer <token>` header and returns a real 401 on a
-  missing or wrong one. This is its own HTTP round trip, separate from the
-  mutating call that follows (`lock acquire`, `strategy log`, ...) —
-  mirroring the existing local shape, where a `cmd*` function calls
-  `VerifyIdentityToken` as an explicit pre-check before acting, not folded
-  into the action itself. That costs one extra request per mutating
-  command in remote mode versus local mode's single in-process call — an
-  accepted, honest tradeoff, not something this feature tries to optimize
-  away by restructuring how commands work. This answers "which identity is
-  this caller allowed to act as."
-- *Server-wide access gate* (new): `stratagema serve -access-token=<secret>`
-  (or `STRATAGEMA_SERVER_ACCESS_TOKEN`) requires every single request —
-  every route, including the previously-open `GET /health`, `GET /locks`,
-  and `GET /stream/interest` — to carry that value on a dedicated
-  `X-Stratagema-Access-Token` header, checked with
-  `crypto/subtle.ConstantTimeCompare` before the request reaches any
-  handler, or it's rejected with a real 401. This answers a coarser
-  question: "can this caller reach the server at all." It's a genuinely
-  separate header from `Authorization: Bearer` — deliberately, since a
-  request against a gated server acting as a protected identity carries
-  both at once (one proves you may reach the server, the other proves you
-  may act as that identity), and conflating them into one header would make
-  that combination impossible to express. Point any command at a gated
-  server the same way as `-token`: set `STRATAGEMA_SERVER_ACCESS_TOKEN` in
-  the calling process's environment (read once when `-db=http(s)://...`
-  constructs its `RemoteStore`), or leave it unset against an ungated
-  server — zero observable difference from before this feature existed.
-
-**TLS.** `stratagema serve` also accepts `-tls-cert=<path> -tls-key=<path>`: when
-both are given, it listens with `http.ListenAndServeTLS` instead of plain
-`http.ListenAndServe`, and the startup banner and route-table print the
-real `https://` scheme it's actually serving. Giving only one of the two is
-a real configuration error, rejected at startup with a specific message —
-never silently ignored or guessed at. Leaving both unset is the unchanged
-default: plain HTTP, exactly as before.
-
-This is deliberately narrow: no cert generation, no rotation, no
-ACME/Let's Encrypt integration — that's real, separate infrastructure this
-project isn't taking on. `-tls-cert`/`-tls-key` is for a quick,
-self-contained option (a self-signed cert for testing, or a cert already
-provisioned by other means) — for a real hosted production deployment, the
-more common and recommended path is still a TLS-terminating reverse proxy
-in front of plain-HTTP `serve` (Caddy, nginx, Cloudflare Tunnel, a cloud
-load balancer), not native TLS.
-
-**Real HTTP status codes**, not a blanket 200/500: 400 for a malformed or
-incomplete request, 401 for a failed identity-token verification, 404 for
-an unknown id, 409 for a genuine conflict (e.g. `lock acquire` on a resource
-someone else already holds), 500 for anything unexpected. `RemoteStore`
-turns a non-2xx response back into a plain Go error carrying the server's
-message — not a typed error a caller can `errors.Is` against, matching how
-every existing `cmd*` function already just does `if err != nil { die(...)
-}` today.
-
-**Partially-closed gap, stated plainly:** every mutating call to the
-underlying `Coordinator` methods (`AcquireLock` and friends) still takes no
-token parameter of its own to check, so `/identities/verify` remains the
-one and only place per-identity token verification is enforced — the same
-way today's local CLI enforces it as a separate pre-check rather than
-inside `Store`'s own methods, and nothing new stops a raw
-`POST /locks/acquire` that never called `/identities/verify` first, the
-same way nothing stops a Go program that imports this package's `Store`
-type directly from skipping `VerifyIdentityToken` today. What *is* new: the
-optional `-access-token`/TLS pair above close the two gaps that used to be
-unconditional — an unauthenticated caller reading every lock, identity, and
-strategy event log over the network with zero gate, and no way to encrypt
-the wire without a separate reverse proxy. Both remain opt-in and
-coarse-grained by design, not a full access-control system:
-**not built here, deliberately** — rate limiting/DoS protection (a real,
-separate infrastructure concern); any per-route or per-client access
-policy beyond the one shared server-wide gate (the existing per-identity
-token system already covers fine-grained "who can act as which identity" —
-`-access-token` is a different, coarser layer: "can you reach the server at
-all," not an ACL system); and cert management/rotation/ACME (see "TLS"
-above). Put a `serve` instance behind something that provides what's still
-missing (a reverse proxy, a VPN, an SSH tunnel, a rate limiter) before
-exposing it beyond a trusted network.
+`serve` is read-only from the outside: `GET /health`, `GET /locks` (a JSON
+snapshot of active locks), and `GET /stream/interest?identity=<id>` (the SSE
+feed above). There is no way to acquire a lock, create an identity, or log a
+strategy event over the wire — every mutating command still talks to the
+local SQLite file named by `-db` directly. `stratagema serve`'s own startup
+output prints the exact three routes.
 
 ## What this deliberately is not
 
@@ -217,6 +108,11 @@ exposing it beyond a trusted network.
 - **No harness lock-in.** Talk to it from Claude Code, Codex, Pi, or a bare
   curl script from a shell — it does not care what is driving the agent on
   either end.
+- **No remote coordination.** Every command always opens a local SQLite
+  file named by `-db`; there is no way to point one process's CLI at
+  another machine's database over the network. `serve`'s three routes
+  (above) are the only network surface this branch has, and they're
+  read-only.
 
 ## Releases
 
@@ -279,23 +175,6 @@ here rather than left for someone to discover:
   even before touching this; a real step toward shared, less-trusted, or
   adversarial use once identities that need it are actually protected —
   not a complete access-control system on its own.
-- **The server-wide access gate (`-access-token`) is opt-in and
-  intentionally coarse-grained.** It's one shared secret gating "can this
-  caller reach the server at all" on every route, checked once by shared
-  middleware before any handler runs — not a per-route or per-client ACL
-  system, and not a replacement for the per-identity token system above
-  ("who can act as which identity" stays that system's job). **Not built,
-  deliberately:** rate limiting/DoS protection, and any finer-grained
-  policy than the one shared token — both real, separate problems. A
-  `serve` instance left ungated (the default) behaves exactly as it always
-  has.
-- **Native TLS (`-tls-cert`/`-tls-key`) has no cert lifecycle behind it.**
-  No generation, no rotation, no ACME/Let's Encrypt integration — bring
-  your own cert (a self-signed one for testing, or one provisioned by
-  other means). For a real hosted deployment, a TLS-terminating reverse
-  proxy in front of plain-HTTP `serve` (Caddy, nginx, Cloudflare Tunnel, a
-  cloud load balancer) is still the recommended path; native TLS here is
-  for a quick, self-contained option, not a replacement for that.
 - **SSE reconnect does a full replay, not a resume.** `/stream/interest`
   has no durable cursor across a `serve` restart — a client that
   reconnects gets everything again from the start, not just what it
@@ -331,102 +210,13 @@ here rather than left for someone to discover:
   remains "keep the binary in sync," a real, separate feature (schema
   versioning) this project deliberately doesn't have.
 
-## `stratagema-runner`: a separate tool that actually launches a harness
-
-Stratagema itself coordinates agents; it deliberately does not run them —
-see "No forever-running orchestrator" above. `stratagema-runner` is a
-genuinely separate binary, built and run independently
-(`go build -o bin/stratagema-runner ./runner`, never wired into
-`stratagema`'s own command switch), that takes the first real step past
-that boundary: it launches one agent harness (Claude Code, Codex, ...)
-against one [Faculty](#status-early-four-primitives-real-and-tested) for
-one strategy, and reports back — but only as an ordinary client of
-Stratagema's existing public Coordinator API, the same HTTP surface
-`RemoteStore` and any other remote client use. It never imports
-`stratagema`'s `Store`/`Coordinator` types and acts as if it were part of
-the core, which is what keeps a later, heavier version of this tool (spawn
-in a sandboxed container instead of on this machine) a change to
-`stratagema-runner`'s internals only, never to Stratagema's coordination
-core. In fact the boundary is enforced by the Go compiler as much as by
-discipline here: `stratagema`'s root package is a single flat `package
-main` (per `go.mod`), which Go cannot import from anywhere — so `runner/`
-reimplements the small, stable slice of Faculty-parsing and
-Coordinator-HTTP-calling it actually needs (`runner/faculty.go`,
-`runner/client.go`) rather than sharing code with the root package.
-
-**Flags:**
-
-```
-stratagema-runner -faculty=<path> -harness-cmd=<cmd> -db=<url> \
-                   -identity=<id> -strategy=<id> -task=<text> [-token=<token>]
-```
-
-- `-faculty` — path to the Faculty file to run.
-- `-harness-cmd` — the literal shell command to invoke, e.g. `"claude -p"`
-  or `"codex exec"`. Run through `sh -c`, with the constructed prompt
-  appended as one trailing positional argument (`sh -c 'cmd "$@"' sh
-  <prompt>`) — matching how `claude -p "<prompt>"` and `codex exec
-  "<prompt>"` both take a prompt. No harness-name-to-command mapping
-  table: the operator supplies the exact command directly (see "not
-  built" below).
-- `-db` — a coordinator URL (`http://` or `https://`) for a running
-  `stratagema serve` instance. Unlike every other command in this
-  project, **`stratagema-runner` does not accept a local SQLite file
-  path** — see `runner/client.go`'s `requireRemoteDB` doc comment: talking
-  to a local file directly would mean re-implementing `Store`'s write
-  path in-process, exactly the pattern this tool's architecture rules
-  out. For local/personal use, run `stratagema serve -db=<file>` yourself
-  and point `-db` at `http://localhost:<port>`.
-- `-identity` — an existing identity ID to act as. The runner does not
-  create identities.
-- `-strategy` — an existing strategy ID to log against. The runner does
-  not create strategies.
-- `-task` — a short description of this run, appended to the Faculty's
-  own prose as the actual prompt sent to the harness.
-- `-token` / `STRATAGEMA_TOKEN` — same convention as the main CLI, for a
-  protected identity.
-
-**The one real, load-bearing piece of logic here.** Every
-`strategy_events` kind today is self-attested — written by whichever
-identity chose to write it, with no equivalent of a Unix process's real
-exit code, "the one signal in the entire model that isn't self-reported."
-`stratagema-runner` is a partial, honest answer for exactly one case: the
-harness process it launches has a real kernel-supplied exit code, not a
-self-reported one. Exit `0` logs a `step_completed` event with a
-truncated (≤4KB, stated as such if cut) summary of the harness's stdout;
-any non-zero exit logs a `finding` event stating the real exit code and a
-truncated summary of stderr — honestly, never as `step_completed`. It
-still covers only one event kind's worth of ground truth, not a general
-"gate"/exit-code primitive for every strategy step — see this project's
-own gap analysis for the fuller picture.
-
-**What this deliberately does not do (real, separate, future scope):**
-
-- **No Schema/DAG execution.** "Schema" (a `steps[]`/`depends_on` DAG
-  composing multiple Faculties) was designed in docs but never built as
-  parseable code — only a single `Faculty` exists today. This runner runs
-  exactly one Faculty, once; multi-step orchestration is a real,
-  separate, larger feature.
-- **No harness-name-to-command config/mapping.** `-harness-cmd` is typed
-  out in full every time. A config file or name→command table (`claude` →
-  `claude -p`, `codex` → `codex exec`, ...) is a real, separate feature.
-- **No sandboxing, no containerization, no process supervision or
-  restart-on-crash, no daemon.** This runs once, does its one job
-  (launch the harness, log what happened), and exits. Making this a
-  "platform" — spawn in an isolated container, run many of these under a
-  scheduler — is the explicit long-run direction, not attempted here.
-- **No lock acquisition.** The runner does not claim any resource lock on
-  behalf of the identity it acts as before invoking the harness. Whether
-  a runner *should* auto-lock whatever it's about to touch is a real,
-  separate design question, left open.
-- **No identity/token creation.** The runner acts as an identity that
-  must already exist; it never creates one.
-
 ## Who this is for
 
 A solo developer running more than one agent against the same project who
 wants those agents to not clobber each other's work, and to find out about
-relevant changes without polling by hand.
+relevant changes without polling by hand — on one machine, one local
+database file. Coordinating across machines needs the remote-coordination
+branch of this project; this branch deliberately doesn't have that.
 
 ## License
 

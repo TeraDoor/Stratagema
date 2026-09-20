@@ -1083,9 +1083,9 @@ func TestRecentPropagationsForIdentityLimitEdgeCases(t *testing.T) {
 // nothing overwritten) must hold under real concurrent pressure.
 func TestConcurrentLogStrategyEventNoLostWrites(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "concurrent-events.db")
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 
@@ -1171,9 +1171,9 @@ func TestConcurrentLogStrategyEventNoLostWrites(t *testing.T) {
 // not a corrupted mix, not empty/invalid.
 func TestConcurrentSetStrategyGroupAndStatus(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "concurrent-mutations.db")
-	s, err := openLocalStore(db)
+	s, err := openStore(db)
 	if err != nil {
-		t.Fatalf("openLocalStore: %v", err)
+		t.Fatalf("openStore: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 
