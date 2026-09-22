@@ -387,7 +387,7 @@ func TestIdentityUnknownSubcommand(t *testing.T) {
 // -h` is NOT special-cased the way the top level is. "-h" falls into
 // cmdIdentity's switch as an ordinary (unknown) subcommand and is rejected
 // with the same error/exit code any other bad subcommand gets. This is not
-// unique to identity -- lock, faculty, strategy, and interest all have the
+// unique to identity -- lock, profile, strategy, and interest all have the
 // identical dispatcher shape (confirmed by reading each), so this is a
 // consistent, if under-documented, codebase-wide convention, not an
 // identity-specific bug. Changing it only here would make identity diverge
@@ -398,7 +398,7 @@ func TestIdentityHelpNotSpecialCasedAtSubcommandLevel(t *testing.T) {
 	for _, arg := range []string{"-h", "--help", "help"} {
 		out, code := captureOutput(t, func() int { return cmdIdentity([]string{arg}) })
 		if code != 2 {
-			t.Fatalf("cmdIdentity([%s]): exit %d, want 2 (treated as an unknown subcommand, matching lock/faculty/strategy/interest)", arg, code)
+			t.Fatalf("cmdIdentity([%s]): exit %d, want 2 (treated as an unknown subcommand, matching lock/profile/strategy/interest)", arg, code)
 		}
 		if !strings.Contains(out, "unknown subcommand") {
 			t.Fatalf("cmdIdentity([%s]): want an unknown-subcommand message, got:\n%s", arg, out)

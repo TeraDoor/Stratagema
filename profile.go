@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-// Faculty is an agent-role definition: a small, flat frontmatter block plus
-// a free-form prose body describing the role's actual behavior. Faculties
+// Profile is an agent-role definition: a small, flat frontmatter block plus
+// a free-form prose body describing the role's actual behavior. Profiles
 // are deliberately not stored in the SQLite database — they're files on
 // disk, meant to be read, copied, and hand-edited like any other config a
 // human or agent authors directly, not rows behind a CLI's exclusive
 // control.
-type Faculty struct {
+type Profile struct {
 	Name       string
 	Capability string
 	Harness    string
@@ -23,30 +23,30 @@ type Faculty struct {
 	Body       string // everything after the closing ---, trimmed
 }
 
-// defaultFacultiesDir mirrors defaultDBPath's own resolution order in
+// defaultProfilesDir mirrors defaultDBPath's own resolution order in
 // store.go: an explicit env var, else a project-local default.
-func defaultFacultiesDir() string {
-	if v := os.Getenv("STRATAGEMA_FACULTIES"); v != "" {
+func defaultProfilesDir() string {
+	if v := os.Getenv("STRATAGEMA_PROFILES"); v != "" {
 		return v
 	}
-	return filepath.Join(".stratagema", "faculties")
+	return filepath.Join(".stratagema", "profiles")
 }
 
-// facultiesDirFlag is the faculty commands' equivalent of dbPathFlag in
+// profilesDirFlag is the profile commands' equivalent of dbPathFlag in
 // cli.go — same override pattern, different default.
-func facultiesDirFlag(fs *flag.FlagSet) *string {
-	return fs.String("faculties-dir", "", "faculties directory (default: $STRATAGEMA_FACULTIES, else ./.stratagema/faculties)")
+func profilesDirFlag(fs *flag.FlagSet) *string {
+	return fs.String("profiles-dir", "", "profiles directory (default: $STRATAGEMA_PROFILES, else ./.stratagema/profiles)")
 }
 
-func resolveFacultiesDir(flagVal string) string {
+func resolveProfilesDir(flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	return defaultFacultiesDir()
+	return defaultProfilesDir()
 }
 
 // Frontmatter parse errors are real and specific, not a generic "invalid
-// faculty file" — matching this codebase's existing style (see
+// profile file" — matching this codebase's existing style (see
 // validResourceName, ErrLockHeld) of naming exactly what's wrong.
 var (
 	ErrMissingOpeningDelimiter = errors.New("missing opening --- delimiter (file must start with a line containing only ---)")
@@ -61,12 +61,12 @@ func missingFieldError(key string) error {
 	return fmt.Errorf("missing required frontmatter field %q", key)
 }
 
-// validFacultyName guards the one place a user-supplied name is turned
-// directly into a file path (faculty create's -name, faculty show's
+// validProfileName guards the one place a user-supplied name is turned
+// directly into a file path (profile create's -name, profile show's
 // positional name): filepath.Join does not stop a path-separator-bearing
-// name from walking outside the faculties directory. Verified directly —
-// before this check existed, `faculty create -name=../evil` wrote
-// evil.md one directory above the intended faculties dir, not inside it.
+// name from walking outside the profiles directory. Verified directly —
+// before this check existed, `profile create -name=../evil` wrote
+// evil.md one directory above the intended profiles dir, not inside it.
 // Same "reject the dangerous characters at the one point a name is first
 // written" pattern as validResourceName in lock.go, adapted for a
 // filesystem name rather than a database column: a bare ".." or "."
@@ -74,23 +74,23 @@ func missingFieldError(key string) error {
 // turns it into "...md" / "..md", an ordinary filename, not a parent-dir
 // token), so only an embedded separator — the thing that can introduce a
 // new, standalone ".." path segment — needs rejecting.
-func validFacultyName(name string) error {
+func validProfileName(name string) error {
 	if name == "" {
-		return fmt.Errorf("faculty name must not be empty")
+		return fmt.Errorf("profile name must not be empty")
 	}
 	if strings.ContainsAny(name, "/\\") || strings.ContainsRune(name, 0) {
-		return fmt.Errorf("faculty name must not contain a path separator: %q", name)
+		return fmt.Errorf("profile name must not contain a path separator: %q", name)
 	}
 	return nil
 }
 
-// ParseFaculty hand-parses exactly the frontmatter subset this project
+// ParseProfile hand-parses exactly the frontmatter subset this project
 // actually uses: a --- delimited block of flat "key: value" lines, where
 // one key (tools) has a bracketed list value like [a, b, c], followed by a
 // prose body. Deliberately not a general YAML parser — this format has no
 // nesting, no multi-line values, no quoting rules beyond what's needed
 // here.
-func ParseFaculty(data []byte) (*Faculty, error) {
+func ParseProfile(data []byte) (*Profile, error) {
 	// Normalize CRLF up front so a Windows-authored file parses the same
 	// way as a Unix one; everything below only ever sees \n.
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
@@ -111,7 +111,7 @@ func ParseFaculty(data []byte) (*Faculty, error) {
 		return nil, ErrMissingClosingDelimiter
 	}
 
-	f := &Faculty{}
+	f := &Profile{}
 	for _, raw := range lines[1:closeIdx] {
 		line := strings.TrimSpace(raw)
 		if line == "" {
@@ -169,7 +169,7 @@ func ParseFaculty(data []byte) (*Faculty, error) {
 // parseToolsList parses the one non-scalar value this format has:
 // "[a, b, c]". Anything not wrapped in brackets, or an empty list, is a
 // real parse error rather than being silently treated as "no tools" —
-// a Faculty with no tool access is worth stating explicitly, and this
+// a Profile with no tool access is worth stating explicitly, and this
 // format doesn't have a way to state it (an explicit empty list reads as
 // author error, not intent, given every hand-written example declares at
 // least one tool).
@@ -193,15 +193,15 @@ func parseToolsList(value string) ([]string, error) {
 	return tools, nil
 }
 
-// ParseFacultyFile reads path and parses it, wrapping any parse error with
-// the path so a caller scanning many files (faculty list) can report
+// ParseProfileFile reads path and parses it, wrapping any parse error with
+// the path so a caller scanning many files (profile list) can report
 // exactly which file failed and why.
-func ParseFacultyFile(path string) (*Faculty, error) {
+func ParseProfileFile(path string) (*Profile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := ParseFaculty(data)
+	f, err := ParseProfile(data)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -209,8 +209,8 @@ func ParseFacultyFile(path string) (*Faculty, error) {
 }
 
 // render produces the on-disk frontmatter + body form of f, the inverse of
-// ParseFaculty for the fields faculty create writes.
-func (f *Faculty) render() string {
+// ParseProfile for the fields profile create writes.
+func (f *Profile) render() string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "name: %s\n", f.Name)
@@ -225,69 +225,69 @@ func (f *Faculty) render() string {
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
-func cmdFaculty(args []string) int {
+func cmdProfile(args []string) int {
 	if len(args) == 0 {
-		fmt.Println("usage: stratagema faculty <create|list|show> [flags]")
+		fmt.Println("usage: stratagema profile <create|list|show> [flags]")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "create":
-		return cmdFacultyCreate(rest)
+		return cmdProfileCreate(rest)
 	case "list":
-		return cmdFacultyList(rest)
+		return cmdProfileList(rest)
 	case "show":
-		return cmdFacultyShow(rest)
+		return cmdProfileShow(rest)
 	default:
-		return die(2, "faculty: unknown subcommand %q (create|list|show)", sub)
+		return die(2, "profile: unknown subcommand %q (create|list|show)", sub)
 	}
 }
 
-func cmdFacultyCreate(args []string) int {
-	fs := flag.NewFlagSet("faculty create", flag.ExitOnError)
-	dirFlag := facultiesDirFlag(fs)
-	name := fs.String("name", "", "faculty name, used as the filename <name>.md (required)")
+func cmdProfileCreate(args []string) int {
+	fs := flag.NewFlagSet("profile create", flag.ExitOnError)
+	dirFlag := profilesDirFlag(fs)
+	name := fs.String("name", "", "profile name, used as the filename <name>.md (required)")
 	capability := fs.String("capability", "", "short label for what this role is for, e.g. go-development (required)")
 	harness := fs.String("harness", "", "the agent harness this role runs under, e.g. claude-code (required)")
 	tools := fs.String("tools", "", "comma-separated tool list, e.g. read_file,write_file,exec (required)")
 	fs.Parse(args)
 
 	if *name == "" || *capability == "" || *harness == "" || *tools == "" {
-		return die(1, "faculty create: -name, -capability, -harness, and -tools are all required")
+		return die(1, "profile create: -name, -capability, -harness, and -tools are all required")
 	}
-	if err := validFacultyName(*name); err != nil {
-		return die(1, "faculty create: %v", err)
+	if err := validProfileName(*name); err != nil {
+		return die(1, "profile create: %v", err)
 	}
 
 	toolList := strings.Split(*tools, ",")
 	for i, t := range toolList {
 		toolList[i] = strings.TrimSpace(t)
 		if toolList[i] == "" {
-			return die(1, "faculty create: -tools contains an empty entry: %q", *tools)
+			return die(1, "profile create: -tools contains an empty entry: %q", *tools)
 		}
 	}
 
-	dir := resolveFacultiesDir(*dirFlag)
+	dir := resolveProfilesDir(*dirFlag)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return die(1, "faculty create: %v", err)
+		return die(1, "profile create: %v", err)
 	}
 	path := filepath.Join(dir, *name+".md")
 	if _, err := os.Stat(path); err == nil {
-		return die(1, "faculty create: %s already exists, refusing to overwrite", path)
+		return die(1, "profile create: %s already exists, refusing to overwrite", path)
 	} else if !os.IsNotExist(err) {
-		return die(1, "faculty create: %v", err)
+		return die(1, "profile create: %v", err)
 	}
 
-	f := &Faculty{
+	f := &Profile{
 		Name:       *name,
 		Capability: *capability,
 		Harness:    *harness,
 		Tools:      toolList,
 		Body: fmt.Sprintf(
 			"Describe %s's actual behavior here: what it does, what it deliberately\n"+
-				"does not do, and how it should coordinate with other Faculties sharing\n"+
+				"does not do, and how it should coordinate with other Profiles sharing\n"+
 				"this project. This placeholder is not a real role definition — replace\n"+
-				"it before this Faculty is used.",
+				"it before this Profile is used.",
 			*name,
 		),
 	}
@@ -297,32 +297,32 @@ func cmdFacultyCreate(args []string) int {
 	fh, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
-			return die(1, "faculty create: %s already exists, refusing to overwrite", path)
+			return die(1, "profile create: %s already exists, refusing to overwrite", path)
 		}
-		return die(1, "faculty create: %v", err)
+		return die(1, "profile create: %v", err)
 	}
 	defer fh.Close()
 	if _, err := fh.WriteString(f.render()); err != nil {
-		return die(1, "faculty create: %v", err)
+		return die(1, "profile create: %v", err)
 	}
 
 	fmt.Printf("created %s\n  capability: %s\n  harness:    %s\n  tools:      %s\n", path, f.Capability, f.Harness, strings.Join(f.Tools, ", "))
 	return 0
 }
 
-func cmdFacultyList(args []string) int {
-	fs := flag.NewFlagSet("faculty list", flag.ExitOnError)
-	dirFlag := facultiesDirFlag(fs)
+func cmdProfileList(args []string) int {
+	fs := flag.NewFlagSet("profile list", flag.ExitOnError)
+	dirFlag := profilesDirFlag(fs)
 	fs.Parse(args)
 
-	dir := resolveFacultiesDir(*dirFlag)
+	dir := resolveProfilesDir(*dirFlag)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("no faculties")
+			fmt.Println("no profiles")
 			return 0
 		}
-		return die(1, "faculty list: %v", err)
+		return die(1, "profile list: %v", err)
 	}
 
 	var paths []string
@@ -333,18 +333,18 @@ func cmdFacultyList(args []string) int {
 		paths = append(paths, filepath.Join(dir, e.Name()))
 	}
 	if len(paths) == 0 {
-		fmt.Println("no faculties")
+		fmt.Println("no profiles")
 		return 0
 	}
 
 	// A file that fails to parse is reported inline, clearly, and does not
 	// stop the rest of the listing or crash the command — one hand-edited
-	// bad file shouldn't hide every other faculty that's fine.
+	// bad file shouldn't hide every other profile that's fine.
 	exit := 0
 	for _, p := range paths {
-		f, err := ParseFacultyFile(p)
+		f, err := ParseProfileFile(p)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "stratagema: faculty list: skipping %v\n", err)
+			fmt.Fprintf(os.Stderr, "stratagema: profile list: skipping %v\n", err)
 			exit = 1
 			continue
 		}
@@ -353,25 +353,25 @@ func cmdFacultyList(args []string) int {
 	return exit
 }
 
-func cmdFacultyShow(args []string) int {
-	fs := flag.NewFlagSet("faculty show", flag.ExitOnError)
-	dirFlag := facultiesDirFlag(fs)
+func cmdProfileShow(args []string) int {
+	fs := flag.NewFlagSet("profile show", flag.ExitOnError)
+	dirFlag := profilesDirFlag(fs)
 	fs.Parse(args)
 
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return die(1, "faculty show: exactly one faculty name is required, e.g. `stratagema faculty show builder`")
+		return die(1, "profile show: exactly one profile name is required, e.g. `stratagema profile show builder`")
 	}
 	name := rest[0]
-	if err := validFacultyName(name); err != nil {
-		return die(1, "faculty show: %v", err)
+	if err := validProfileName(name); err != nil {
+		return die(1, "profile show: %v", err)
 	}
 
-	dir := resolveFacultiesDir(*dirFlag)
+	dir := resolveProfilesDir(*dirFlag)
 	path := filepath.Join(dir, name+".md")
-	f, err := ParseFacultyFile(path)
+	f, err := ParseProfileFile(path)
 	if err != nil {
-		return die(1, "faculty show: %v", err)
+		return die(1, "profile show: %v", err)
 	}
 
 	fmt.Printf("name:       %s\n", f.Name)

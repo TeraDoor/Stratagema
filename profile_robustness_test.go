@@ -8,27 +8,27 @@ import (
 	"testing"
 )
 
-// This file is Faculty's first dedicated adversarial pass — lock.go,
+// This file is Profile's first dedicated adversarial pass — lock.go,
 // strategy.go, serve.go, and the runner already had one earlier this
-// session; ParseFaculty/ParseFacultyFile/the faculty CLI had not. It
+// session; ParseProfile/ParseProfileFile/the profile CLI had not. It
 // covers: frontmatter field-type edge cases (every scalar field plus the
 // one non-scalar field, tools), delimiter/structure adversarial input,
-// body adversarial input, faculty create's file-writing path (including a
+// body adversarial input, profile create's file-writing path (including a
 // real path-traversal check against an actual temp directory — see
-// validFacultyName in faculty.go and TestFacultyCreatePathTraversalNameRejected
-// below), and faculty list's directory-scanning robustness.
+// validProfileName in profile.go and TestProfileCreatePathTraversalNameRejected
+// below), and profile list's directory-scanning robustness.
 
 // ── frontmatter field-type edge cases ───────────────────────────────────
 
-// facultyEdgeCaseValues are reused across name/capability/harness below so
+// profileEdgeCaseValues are reused across name/capability/harness below so
 // "what counts as an edge case" is defined once: empty (via the missing
 // -field check, covered separately), very long, Unicode, a value
 // containing a literal colon (this parser cuts on the *first* colon only,
 // so the rest of the line -- including any colons -- must survive
 // unmangled), and a value that is itself the delimiter string. None of
 // these should error: every field here is a free string with no charset
-// restriction by design (see ParseFaculty's own doc comment).
-func facultyEdgeCaseValues() map[string]string {
+// restriction by design (see ParseProfile's own doc comment).
+func profileEdgeCaseValues() map[string]string {
 	return map[string]string{
 		"long":             strings.Repeat("x", 5000),
 		"unicode":          "🎉 emoji, CJK 漢字, RTL مرحبا, combining é",
@@ -37,7 +37,7 @@ func facultyEdgeCaseValues() map[string]string {
 	}
 }
 
-func facultyFrontmatterWithField(key, value string) string {
+func profileFrontmatterWithField(key, value string) string {
 	fields := map[string]string{
 		"name":       "builder",
 		"capability": "go-development",
@@ -53,14 +53,14 @@ func facultyFrontmatterWithField(key, value string) string {
 		"body\n"
 }
 
-func TestParseFacultyScalarFieldEdgeCases(t *testing.T) {
+func TestParseProfileScalarFieldEdgeCases(t *testing.T) {
 	for _, field := range []string{"name", "capability", "harness"} {
-		for label, value := range facultyEdgeCaseValues() {
+		for label, value := range profileEdgeCaseValues() {
 			t.Run(field+"/"+label, func(t *testing.T) {
-				input := facultyFrontmatterWithField(field, value)
-				got, err := ParseFaculty([]byte(input))
+				input := profileFrontmatterWithField(field, value)
+				got, err := ParseProfile([]byte(input))
 				if err != nil {
-					t.Fatalf("ParseFaculty with %s=%q: want success, got error: %v", field, value, err)
+					t.Fatalf("ParseProfile with %s=%q: want success, got error: %v", field, value, err)
 				}
 				var gotVal string
 				switch field {
@@ -72,18 +72,18 @@ func TestParseFacultyScalarFieldEdgeCases(t *testing.T) {
 					gotVal = got.Harness
 				}
 				if gotVal != value {
-					t.Fatalf("ParseFaculty %s = %q, want %q", field, gotVal, value)
+					t.Fatalf("ParseProfile %s = %q, want %q", field, gotVal, value)
 				}
 			})
 		}
 	}
 }
 
-// TestParseFacultyHarnessTrulyUnvalidated confirms the claim in the task
+// TestParseProfileHarnessTrulyUnvalidated confirms the claim in the task
 // brief directly rather than assuming it from reading the code: harness is
 // a free string with zero allow-list or format check anywhere in the parse
 // path. Nonsense input must parse cleanly.
-func TestParseFacultyHarnessTrulyUnvalidated(t *testing.T) {
+func TestParseProfileHarnessTrulyUnvalidated(t *testing.T) {
 	nonsense := []string{
 		"", // handled by the required-field check below, not here
 		"claude-code; rm -rf /",
@@ -94,8 +94,8 @@ func TestParseFacultyHarnessTrulyUnvalidated(t *testing.T) {
 	}
 	for _, h := range nonsense[1:] { // skip "" -- that's the required-field test's job
 		t.Run(h, func(t *testing.T) {
-			input := facultyFrontmatterWithField("harness", h)
-			got, err := ParseFaculty([]byte(input))
+			input := profileFrontmatterWithField("harness", h)
+			got, err := ParseProfile([]byte(input))
 			if err != nil {
 				t.Fatalf("harness=%q: want no validation error, got: %v", h, err)
 			}
@@ -106,9 +106,9 @@ func TestParseFacultyHarnessTrulyUnvalidated(t *testing.T) {
 	}
 }
 
-// TestParseFacultyToolsListEdgeCases exercises the one non-scalar field's
+// TestParseProfileToolsListEdgeCases exercises the one non-scalar field's
 // naive strings.Split(inner, ",") parser directly.
-func TestParseFacultyToolsListEdgeCases(t *testing.T) {
+func TestParseProfileToolsListEdgeCases(t *testing.T) {
 	t.Run("hundreds of entries", func(t *testing.T) {
 		names := make([]string, 300)
 		for i := range names {
@@ -116,7 +116,7 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 		}
 		toolsLine := "tools: [" + strings.Join(names, ", ") + "]\n"
 		input := "---\nname: n\ncapability: c\nharness: h\n" + toolsLine + "---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("300-entry tools list: want success, got: %v", err)
 		}
@@ -127,7 +127,7 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 
 	t.Run("duplicate entries are kept, not deduped", func(t *testing.T) {
 		input := "---\nname: n\ncapability: c\nharness: h\ntools: [read_file, read_file, read_file]\n---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("duplicate tools: want success, got: %v", err)
 		}
@@ -140,11 +140,11 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 		// Documents actual behavior, verified via a standalone probe before
 		// writing this assertion: parseToolsList only ever strips exactly
 		// one leading '[' and one trailing ']' -- by design, this format
-		// has no nesting (see ParseFaculty's doc comment) -- so "[[a]]"
+		// has no nesting (see ParseProfile's doc comment) -- so "[[a]]"
 		// yields one tool literally named "[a]", not a parse error and not
 		// two nested tools.
 		input := "---\nname: n\ncapability: c\nharness: h\ntools: [[a]]\n---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("tools: [[a]]: want success (no nesting support, but no crash), got: %v", err)
 		}
@@ -155,7 +155,7 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 
 	t.Run("entries containing bracket characters ride along as literal text", func(t *testing.T) {
 		input := "---\nname: n\ncapability: c\nharness: h\ntools: [a[1], b]end]\n---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("bracket-containing entries: want success, got: %v", err)
 		}
@@ -172,11 +172,11 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 
 	t.Run("a tool name containing a comma cannot be represented -- splits, doesn't error", func(t *testing.T) {
 		// Documents an inherent limitation of "no quoting rules beyond
-		// what's needed here" (ParseFaculty's own doc comment), not a bug:
+		// what's needed here" (ParseProfile's own doc comment), not a bug:
 		// a comma inside a bracket entry is indistinguishable from a
 		// separator, so it silently becomes two entries.
 		input := "---\nname: n\ncapability: c\nharness: h\ntools: [a, b, c]\n---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("want success, got: %v", err)
 		}
@@ -191,7 +191,7 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 		// two physical lines never reaches parseToolsList as one value --
 		// the first line alone ("[a,") is missing its closing bracket.
 		input := "---\nname: n\ncapability: c\nharness: h\ntools: [a,\n  b, c]\n---\nbody\n"
-		_, err := ParseFaculty([]byte(input))
+		_, err := ParseProfile([]byte(input))
 		if err == nil {
 			t.Fatalf("multi-line-looking tools value: want a parse error, got success")
 		}
@@ -206,11 +206,11 @@ func TestParseFacultyToolsListEdgeCases(t *testing.T) {
 
 // ── frontmatter delimiter/structure adversarial cases ───────────────────
 
-// TestParseFacultyExtraDelimitersAreBodyContent confirms a file with three
+// TestParseProfileExtraDelimitersAreBodyContent confirms a file with three
 // or more "---" lines only ever uses the first two as real delimiters --
 // everything after the second is body content, never re-parsed even if it
 // looks exactly like another frontmatter block.
-func TestParseFacultyExtraDelimitersAreBodyContent(t *testing.T) {
+func TestParseProfileExtraDelimitersAreBodyContent(t *testing.T) {
 	input := "---\n" +
 		"name: real\n" +
 		"capability: c\n" +
@@ -222,7 +222,7 @@ func TestParseFacultyExtraDelimitersAreBodyContent(t *testing.T) {
 		"name: fake\n" +
 		"---\n" +
 		"more text\n"
-	got, err := ParseFaculty([]byte(input))
+	got, err := ParseProfile([]byte(input))
 	if err != nil {
 		t.Fatalf("want success, got: %v", err)
 	}
@@ -235,10 +235,10 @@ func TestParseFacultyExtraDelimitersAreBodyContent(t *testing.T) {
 	}
 }
 
-// TestParseFacultyBodyContainingFakeFrontmatterDeep is the same property
+// TestParseProfileBodyContainingFakeFrontmatterDeep is the same property
 // with the embedded look-alike block buried further into a larger body,
 // matching the task brief's exact scenario.
-func TestParseFacultyBodyContainingFakeFrontmatterDeep(t *testing.T) {
+func TestParseProfileBodyContainingFakeFrontmatterDeep(t *testing.T) {
 	input := "---\n" +
 		"name: real\n" +
 		"capability: c\n" +
@@ -255,7 +255,7 @@ func TestParseFacultyBodyContainingFakeFrontmatterDeep(t *testing.T) {
 		"tools: [x]\n" +
 		"---\n" +
 		"Paragraph three, after the fake block.\n"
-	got, err := ParseFaculty([]byte(input))
+	got, err := ParseProfile([]byte(input))
 	if err != nil {
 		t.Fatalf("want success, got: %v", err)
 	}
@@ -267,15 +267,15 @@ func TestParseFacultyBodyContainingFakeFrontmatterDeep(t *testing.T) {
 	}
 }
 
-// TestParseFacultyDelimiterWhitespaceVariants checks the exact
+// TestParseProfileDelimiterWhitespaceVariants checks the exact
 // strings.TrimSpace(lines[i]) == "---" comparison against the forms a
 // real author might type.
-func TestParseFacultyDelimiterWhitespaceVariants(t *testing.T) {
+func TestParseProfileDelimiterWhitespaceVariants(t *testing.T) {
 	base := "name: n\ncapability: c\nharness: h\ntools: [read_file]\n"
 
 	t.Run("trailing space on delimiter still counts", func(t *testing.T) {
 		input := "--- \n" + base + "---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("\"--- \" (trailing space) as opening delimiter: want it accepted (TrimSpace'd), got: %v", err)
 		}
@@ -293,7 +293,7 @@ func TestParseFacultyDelimiterWhitespaceVariants(t *testing.T) {
 		// that still parses, which matches what a reasonable author would
 		// expect more than a column-0-only rule would.
 		input := "   ---   \n" + base + "---\nbody\n"
-		got, err := ParseFaculty([]byte(input))
+		got, err := ParseProfile([]byte(input))
 		if err != nil {
 			t.Fatalf("indented \"   ---   \" as opening delimiter: want it accepted, got: %v", err)
 		}
@@ -304,18 +304,18 @@ func TestParseFacultyDelimiterWhitespaceVariants(t *testing.T) {
 
 	t.Run("four dashes is not a delimiter", func(t *testing.T) {
 		input := "----\n" + base + "---\nbody\n"
-		_, err := ParseFaculty([]byte(input))
+		_, err := ParseProfile([]byte(input))
 		if err == nil {
 			t.Fatalf("\"----\" as opening line: want ErrMissingOpeningDelimiter, got success")
 		}
 	})
 }
 
-// TestParseFacultyOnlyDelimitersNoFields confirms "---\n---\n" -- delimiters
+// TestParseProfileOnlyDelimitersNoFields confirms "---\n---\n" -- delimiters
 // present, everything required missing -- fails on the first missing
 // required field (name), not some other generic error.
-func TestParseFacultyOnlyDelimitersNoFields(t *testing.T) {
-	_, err := ParseFaculty([]byte("---\n---\n"))
+func TestParseProfileOnlyDelimitersNoFields(t *testing.T) {
+	_, err := ParseProfile([]byte("---\n---\n"))
 	if err == nil {
 		t.Fatalf("want a missing-field error, got success")
 	}
@@ -324,18 +324,18 @@ func TestParseFacultyOnlyDelimitersNoFields(t *testing.T) {
 	}
 }
 
-// TestParseFacultyLargeBodyDoesNotChoke reads a several-MB body through the
-// real os.ReadFile path (ParseFacultyFile, not just ParseFaculty on an
+// TestParseProfileLargeBodyDoesNotChoke reads a several-MB body through the
+// real os.ReadFile path (ParseProfileFile, not just ParseProfile on an
 // in-memory []byte) and confirms it parses correctly and promptly.
-// ParseFacultyFile has no size guard at all today (os.ReadFile is
+// ParseProfileFile has no size guard at all today (os.ReadFile is
 // genuinely unbounded) -- this test documents that it at least works
 // correctly for a large well-formed file; whether an unbounded local
 // config-file read is itself something to guard is a design question
-// reported separately, not something this test asserts on, since faculty
+// reported separately, not something this test asserts on, since profile
 // files are hand-authored local files today with no HTTP entry point
 // (unlike serve.go's maxRequestBodyBytes, which bounds actual network
 // input).
-func TestParseFacultyLargeBodyDoesNotChoke(t *testing.T) {
+func TestParseProfileLargeBodyDoesNotChoke(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "huge.md")
 
@@ -349,9 +349,9 @@ func TestParseFacultyLargeBodyDoesNotChoke(t *testing.T) {
 		t.Fatalf("writing large fixture: %v", err)
 	}
 
-	got, err := ParseFacultyFile(path)
+	got, err := ParseProfileFile(path)
 	if err != nil {
-		t.Fatalf("ParseFacultyFile on a ~4.5MB body: want success, got: %v", err)
+		t.Fatalf("ParseProfileFile on a ~4.5MB body: want success, got: %v", err)
 	}
 	if got.Name != "huge" {
 		t.Fatalf("Name = %q, want %q", got.Name, "huge")
@@ -363,11 +363,11 @@ func TestParseFacultyLargeBodyDoesNotChoke(t *testing.T) {
 
 // ── body content adversarial cases ──────────────────────────────────────
 
-func TestParseFacultyEmptyAndWhitespaceOnlyBody(t *testing.T) {
+func TestParseProfileEmptyAndWhitespaceOnlyBody(t *testing.T) {
 	base := "---\nname: n\ncapability: c\nharness: h\ntools: [read_file]\n---\n"
 
 	t.Run("empty body", func(t *testing.T) {
-		got, err := ParseFaculty([]byte(base))
+		got, err := ParseProfile([]byte(base))
 		if err != nil {
 			t.Fatalf("want success, got: %v", err)
 		}
@@ -377,7 +377,7 @@ func TestParseFacultyEmptyAndWhitespaceOnlyBody(t *testing.T) {
 	})
 
 	t.Run("whitespace-only body", func(t *testing.T) {
-		got, err := ParseFaculty([]byte(base + "   \n\t\n   \n"))
+		got, err := ParseProfile([]byte(base + "   \n\t\n   \n"))
 		if err != nil {
 			t.Fatalf("want success, got: %v", err)
 		}
@@ -387,16 +387,16 @@ func TestParseFacultyEmptyAndWhitespaceOnlyBody(t *testing.T) {
 	})
 }
 
-// TestParseFacultyNonUTF8Body confirms invalid UTF-8 byte sequences in the
-// body don't panic anything -- ParseFaculty operates on Go strings, which
+// TestParseProfileNonUTF8Body confirms invalid UTF-8 byte sequences in the
+// body don't panic anything -- ParseProfile operates on Go strings, which
 // can legally hold arbitrary bytes, but a naive rune-aware routine could
 // still misbehave on them.
-func TestParseFacultyNonUTF8Body(t *testing.T) {
+func TestParseProfileNonUTF8Body(t *testing.T) {
 	base := []byte("---\nname: n\ncapability: c\nharness: h\ntools: [read_file]\n---\n")
 	invalid := []byte{0xff, 0xfe, 0x00, 0x81, 'o', 'k', 0xc0, 0xc1}
 	input := append(append([]byte{}, base...), invalid...)
 
-	got, err := ParseFaculty(input)
+	got, err := ParseProfile(input)
 	if err != nil {
 		t.Fatalf("non-UTF8 body: want success (no panic, no mandatory validity check), got: %v", err)
 	}
@@ -405,17 +405,17 @@ func TestParseFacultyNonUTF8Body(t *testing.T) {
 	}
 }
 
-// ── faculty create: file-writing path, path traversal ───────────────────
+// ── profile create: file-writing path, path traversal ───────────────────
 
-// TestFacultyCreatePathTraversalNameRejected is the single most important
-// test in this file. Before validFacultyName existed, this was run for
+// TestProfileCreatePathTraversalNameRejected is the single most important
+// test in this file. Before validProfileName existed, this was run for
 // real against an actual temp directory (not asserted from reading the
-// code): `faculty create -faculties-dir=$WORK/faculties -name=../evil ...`
-// wrote evil.md into $WORK, one directory above $WORK/faculties, silently
+// code): `profile create -profiles-dir=$WORK/profiles -name=../evil ...`
+// wrote evil.md into $WORK, one directory above $WORK/profiles, silently
 // succeeding with exit 0. That is now a rejected, real bug fix -- this
 // test locks the fix in and proves the written file genuinely never lands
-// outside the faculties directory for a range of traversal shapes.
-func TestFacultyCreatePathTraversalNameRejected(t *testing.T) {
+// outside the profiles directory for a range of traversal shapes.
+func TestProfileCreatePathTraversalNameRejected(t *testing.T) {
 	traversalNames := []string{
 		"../evil",
 		"../../evil",
@@ -427,14 +427,14 @@ func TestFacultyCreatePathTraversalNameRejected(t *testing.T) {
 	for _, name := range traversalNames {
 		t.Run(name, func(t *testing.T) {
 			parent := t.TempDir()
-			facultiesDir := filepath.Join(parent, "faculties")
-			if err := os.MkdirAll(facultiesDir, 0o755); err != nil {
+			profilesDir := filepath.Join(parent, "profiles")
+			if err := os.MkdirAll(profilesDir, 0o755); err != nil {
 				t.Fatalf("MkdirAll: %v", err)
 			}
 
 			out, code := captureOutput(t, func() int {
-				return cmdFacultyCreate([]string{
-					"-faculties-dir=" + facultiesDir,
+				return cmdProfileCreate([]string{
+					"-profiles-dir=" + profilesDir,
 					"-name=" + name,
 					"-capability=x",
 					"-harness=y",
@@ -442,14 +442,14 @@ func TestFacultyCreatePathTraversalNameRejected(t *testing.T) {
 				})
 			})
 			if code == 0 {
-				t.Fatalf("faculty create -name=%q: want a non-zero exit (rejected), got 0, output:\n%s", name, out)
+				t.Fatalf("profile create -name=%q: want a non-zero exit (rejected), got 0, output:\n%s", name, out)
 			}
 			if !strings.Contains(out, "path separator") {
-				t.Fatalf("faculty create -name=%q: want a clear path-separator error, got:\n%s", name, out)
+				t.Fatalf("profile create -name=%q: want a clear path-separator error, got:\n%s", name, out)
 			}
 
 			// The real assertion: walk the whole parent tree and confirm no
-			// file was written anywhere, inside or outside facultiesDir.
+			// file was written anywhere, inside or outside profilesDir.
 			var written []string
 			filepath.WalkDir(parent, func(p string, d os.DirEntry, err error) error {
 				if err == nil && !d.IsDir() {
@@ -458,25 +458,25 @@ func TestFacultyCreatePathTraversalNameRejected(t *testing.T) {
 				return nil
 			})
 			if len(written) != 0 {
-				t.Fatalf("faculty create -name=%q: rejected the name but still wrote file(s): %v", name, written)
+				t.Fatalf("profile create -name=%q: rejected the name but still wrote file(s): %v", name, written)
 			}
 		})
 	}
 }
 
-// TestFacultyCreateAbsolutePathNameRejected covers the -name value being an
+// TestProfileCreateAbsolutePathNameRejected covers the -name value being an
 // absolute path outright, rather than a relative traversal.
-func TestFacultyCreateAbsolutePathNameRejected(t *testing.T) {
+func TestProfileCreateAbsolutePathNameRejected(t *testing.T) {
 	parent := t.TempDir()
-	facultiesDir := filepath.Join(parent, "faculties")
-	if err := os.MkdirAll(facultiesDir, 0o755); err != nil {
+	profilesDir := filepath.Join(parent, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	outsideTarget := filepath.Join(parent, "outside-evil")
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyCreate([]string{
-			"-faculties-dir=" + facultiesDir,
+		return cmdProfileCreate([]string{
+			"-profiles-dir=" + profilesDir,
 			"-name=" + outsideTarget,
 			"-capability=x",
 			"-harness=y",
@@ -484,25 +484,25 @@ func TestFacultyCreateAbsolutePathNameRejected(t *testing.T) {
 		})
 	})
 	if code == 0 {
-		t.Fatalf("faculty create with an absolute-path -name: want rejection, got exit 0, output:\n%s", out)
+		t.Fatalf("profile create with an absolute-path -name: want rejection, got exit 0, output:\n%s", out)
 	}
 	if _, err := os.Stat(outsideTarget + ".md"); err == nil {
-		t.Fatalf("faculty create with an absolute-path -name: a file landed at %s.md", outsideTarget)
+		t.Fatalf("profile create with an absolute-path -name: a file landed at %s.md", outsideTarget)
 	}
 }
 
-// TestFacultyCreateNullByteNameRejected checks the in-process path only:
+// TestProfileCreateNullByteNameRejected checks the in-process path only:
 // an argv string containing a literal NUL byte cannot actually be passed
 // through a real OS process's command line (execve simply cannot represent
-// one), so this is exercised by calling cmdFacultyCreate directly with a
+// one), so this is exercised by calling cmdProfileCreate directly with a
 // Go string built to contain \x00, not via a subprocess.
-func TestFacultyCreateNullByteNameRejected(t *testing.T) {
+func TestProfileCreateNullByteNameRejected(t *testing.T) {
 	dir := t.TempDir()
 	name := "evil\x00name"
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyCreate([]string{
-			"-faculties-dir=" + dir,
+		return cmdProfileCreate([]string{
+			"-profiles-dir=" + dir,
 			"-name=" + name,
 			"-capability=x",
 			"-harness=y",
@@ -510,27 +510,27 @@ func TestFacultyCreateNullByteNameRejected(t *testing.T) {
 		})
 	})
 	if code == 0 {
-		t.Fatalf("faculty create with a NUL byte in -name: want rejection, got exit 0, output:\n%s", out)
+		t.Fatalf("profile create with a NUL byte in -name: want rejection, got exit 0, output:\n%s", out)
 	}
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 0 {
-		t.Fatalf("faculty create with a NUL byte in -name: rejected but still wrote %d file(s)", len(entries))
+		t.Fatalf("profile create with a NUL byte in -name: rejected but still wrote %d file(s)", len(entries))
 	}
 }
 
-// TestFacultyShowPathTraversalNameRejected is faculty show's read-side
+// TestProfileShowPathTraversalNameRejected is profile show's read-side
 // counterpart: it builds the exact same filepath.Join(dir, name+".md")
 // from a user-supplied name, so an unguarded traversal there would let
-// `faculty show` read (and print) an arbitrary file elsewhere on disk that
-// happens to be frontmatter-shaped. Same validFacultyName guard, same
+// `profile show` read (and print) an arbitrary file elsewhere on disk that
+// happens to be frontmatter-shaped. Same validProfileName guard, same
 // property, verified the same way.
-func TestFacultyShowPathTraversalNameRejected(t *testing.T) {
+func TestProfileShowPathTraversalNameRejected(t *testing.T) {
 	parent := t.TempDir()
-	facultiesDir := filepath.Join(parent, "faculties")
-	if err := os.MkdirAll(facultiesDir, 0o755); err != nil {
+	profilesDir := filepath.Join(parent, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	// A real, valid Faculty file sitting just outside facultiesDir --
+	// A real, valid Profile file sitting just outside profilesDir --
 	// this is exactly what a successful traversal would have exposed.
 	secret := "---\nname: secret\ncapability: c\nharness: h\ntools: [x]\n---\ntop secret body\n"
 	if err := os.WriteFile(filepath.Join(parent, "secret.md"), []byte(secret), 0o644); err != nil {
@@ -538,24 +538,24 @@ func TestFacultyShowPathTraversalNameRejected(t *testing.T) {
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyShow([]string{"-faculties-dir=" + facultiesDir, "../secret"})
+		return cmdProfileShow([]string{"-profiles-dir=" + profilesDir, "../secret"})
 	})
 	if code == 0 {
-		t.Fatalf("faculty show ../secret: want rejection, got exit 0, output:\n%s", out)
+		t.Fatalf("profile show ../secret: want rejection, got exit 0, output:\n%s", out)
 	}
 	if strings.Contains(out, "top secret body") {
-		t.Fatalf("faculty show ../secret: leaked the outside file's contents:\n%s", out)
+		t.Fatalf("profile show ../secret: leaked the outside file's contents:\n%s", out)
 	}
 	if !strings.Contains(out, "path separator") {
-		t.Fatalf("faculty show ../secret: want a clear path-separator error, got:\n%s", out)
+		t.Fatalf("profile show ../secret: want a clear path-separator error, got:\n%s", out)
 	}
 }
 
-// TestFacultyCreateToolsCLIFlagEdgeCases exercises the CLI-layer tools
-// parser (strings.Split(*tools, ",") in cmdFacultyCreate) -- a separate
+// TestProfileCreateToolsCLIFlagEdgeCases exercises the CLI-layer tools
+// parser (strings.Split(*tools, ",") in cmdProfileCreate) -- a separate
 // code path from parseToolsList's bracketed-list parser above -- through
 // the real create->render->reparse round trip.
-func TestFacultyCreateToolsCLIFlagEdgeCases(t *testing.T) {
+func TestProfileCreateToolsCLIFlagEdgeCases(t *testing.T) {
 	t.Run("hundreds of entries via -tools", func(t *testing.T) {
 		dir := t.TempDir()
 		names := make([]string, 400)
@@ -565,16 +565,16 @@ func TestFacultyCreateToolsCLIFlagEdgeCases(t *testing.T) {
 		toolsFlag := strings.Join(names, ",")
 
 		out, code := captureOutput(t, func() int {
-			return cmdFacultyCreate([]string{
-				"-faculties-dir=" + dir, "-name=big", "-capability=c", "-harness=h",
+			return cmdProfileCreate([]string{
+				"-profiles-dir=" + dir, "-name=big", "-capability=c", "-harness=h",
 				"-tools=" + toolsFlag,
 			})
 		})
 		if code != 0 {
-			t.Fatalf("faculty create with 400 tools: want success, got exit %d, output:\n%s", code, out)
+			t.Fatalf("profile create with 400 tools: want success, got exit %d, output:\n%s", code, out)
 		}
 
-		got, err := ParseFacultyFile(filepath.Join(dir, "big.md"))
+		got, err := ParseProfileFile(filepath.Join(dir, "big.md"))
 		if err != nil {
 			t.Fatalf("reparsing round trip: %v", err)
 		}
@@ -586,15 +586,15 @@ func TestFacultyCreateToolsCLIFlagEdgeCases(t *testing.T) {
 	t.Run("duplicate entries via -tools survive the round trip", func(t *testing.T) {
 		dir := t.TempDir()
 		out, code := captureOutput(t, func() int {
-			return cmdFacultyCreate([]string{
-				"-faculties-dir=" + dir, "-name=dup", "-capability=c", "-harness=h",
+			return cmdProfileCreate([]string{
+				"-profiles-dir=" + dir, "-name=dup", "-capability=c", "-harness=h",
 				"-tools=read_file,read_file,read_file",
 			})
 		})
 		if code != 0 {
 			t.Fatalf("want success, output:\n%s", out)
 		}
-		got, err := ParseFacultyFile(filepath.Join(dir, "dup.md"))
+		got, err := ParseProfileFile(filepath.Join(dir, "dup.md"))
 		if err != nil {
 			t.Fatalf("reparsing: %v", err)
 		}
@@ -612,15 +612,15 @@ func TestFacultyCreateToolsCLIFlagEdgeCases(t *testing.T) {
 		// to produce in the first place). Verified directly, not assumed.
 		dir := t.TempDir()
 		out, code := captureOutput(t, func() int {
-			return cmdFacultyCreate([]string{
-				"-faculties-dir=" + dir, "-name=weird", "-capability=c", "-harness=h",
+			return cmdProfileCreate([]string{
+				"-profiles-dir=" + dir, "-name=weird", "-capability=c", "-harness=h",
 				"-tools=[a],weird],[nested[x]]",
 			})
 		})
 		if code != 0 {
 			t.Fatalf("want success, output:\n%s", out)
 		}
-		got, err := ParseFacultyFile(filepath.Join(dir, "weird.md"))
+		got, err := ParseProfileFile(filepath.Join(dir, "weird.md"))
 		if err != nil {
 			t.Fatalf("reparsing bracket-containing tool names: %v", err)
 		}
@@ -636,9 +636,9 @@ func TestFacultyCreateToolsCLIFlagEdgeCases(t *testing.T) {
 	})
 }
 
-// ── faculty list: directory-scanning robustness ─────────────────────────
+// ── profile list: directory-scanning robustness ─────────────────────────
 
-func TestFacultyListManyFiles(t *testing.T) {
+func TestProfileListManyFiles(t *testing.T) {
 	dir := t.TempDir()
 	const n = 150
 	for i := 0; i < n; i++ {
@@ -650,18 +650,18 @@ func TestFacultyListManyFiles(t *testing.T) {
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	if code != 0 {
-		t.Fatalf("faculty list with %d files: want success, got exit %d, output:\n%s", n, code, out)
+		t.Fatalf("profile list with %d files: want success, got exit %d, output:\n%s", n, code, out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != n {
-		t.Fatalf("faculty list with %d files: got %d output lines, want %d", n, len(lines), n)
+		t.Fatalf("profile list with %d files: got %d output lines, want %d", n, len(lines), n)
 	}
 }
 
-func TestFacultyListSkipsNonMdFiles(t *testing.T) {
+func TestProfileListSkipsNonMdFiles(t *testing.T) {
 	dir := t.TempDir()
 	good := "---\nname: builder\ncapability: c\nharness: h\ntools: [x]\n---\nbody\n"
 	if err := os.WriteFile(filepath.Join(dir, "builder.md"), []byte(good), 0o644); err != nil {
@@ -676,24 +676,24 @@ func TestFacultyListSkipsNonMdFiles(t *testing.T) {
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	if code != 0 {
 		t.Fatalf("want success (non-.md siblings should be silently skipped), got exit %d, output:\n%s", code, out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 1 {
-		t.Fatalf("want exactly 1 listed faculty (non-.md files skipped), got %d lines:\n%s", len(lines), out)
+		t.Fatalf("want exactly 1 listed profile (non-.md files skipped), got %d lines:\n%s", len(lines), out)
 	}
 	if !strings.Contains(out, "builder") {
 		t.Fatalf("want builder.md listed, got:\n%s", out)
 	}
 }
 
-// TestFacultyListSkipsDirectoryNamedWithMdSuffix confirms e.IsDir() really
+// TestProfileListSkipsDirectoryNamedWithMdSuffix confirms e.IsDir() really
 // does prevent a subdirectory literally named "something.md" from being
 // opened and parsed as a file.
-func TestFacultyListSkipsDirectoryNamedWithMdSuffix(t *testing.T) {
+func TestProfileListSkipsDirectoryNamedWithMdSuffix(t *testing.T) {
 	dir := t.TempDir()
 	good := "---\nname: builder\ncapability: c\nharness: h\ntools: [x]\n---\nbody\n"
 	if err := os.WriteFile(filepath.Join(dir, "builder.md"), []byte(good), 0o644); err != nil {
@@ -710,7 +710,7 @@ func TestFacultyListSkipsDirectoryNamedWithMdSuffix(t *testing.T) {
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	if code != 0 {
 		t.Fatalf("want success (directory named *.md should be skipped, not errored on), got exit %d, output:\n%s", code, out)
@@ -723,11 +723,11 @@ func TestFacultyListSkipsDirectoryNamedWithMdSuffix(t *testing.T) {
 	}
 }
 
-// TestFacultyListHandlesSymlinks covers a symlink to a valid Faculty file
+// TestProfileListHandlesSymlinks covers a symlink to a valid Profile file
 // (should list normally, under the symlink's own name) and a broken
 // symlink (should be reported as a parse failure like any other unreadable
 // file, not crash the whole listing).
-func TestFacultyListHandlesSymlinks(t *testing.T) {
+func TestProfileListHandlesSymlinks(t *testing.T) {
 	dir := t.TempDir()
 	realTarget := filepath.Join(t.TempDir(), "real.md")
 	good := "---\nname: linked\ncapability: c\nharness: h\ntools: [x]\n---\nbody\n"
@@ -743,12 +743,12 @@ func TestFacultyListHandlesSymlinks(t *testing.T) {
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	// Non-zero is expected here (broken.md fails to parse), but it must not
 	// crash and must not hide the valid symlinked entry.
 	if !strings.Contains(out, "linked") {
-		t.Fatalf("valid symlink to a real Faculty file: want it listed, got exit %d, output:\n%s", code, out)
+		t.Fatalf("valid symlink to a real Profile file: want it listed, got exit %d, output:\n%s", code, out)
 	}
 	if !strings.Contains(out, "broken.md") {
 		t.Fatalf("broken symlink: want it reported by name as a skip, got:\n%s", out)

@@ -44,7 +44,7 @@ being described after the fact.
   manual for now (real per-invocation reporting from a harness is a
   bigger, harness-dependent lift, not built here), but comparable once it
   exists.
-- **Faculty tooling** — `faculty create/list/show`. A Faculty is an
+- **Profile tooling** — `profile create/list/show`. A Profile is an
   agent-role definition (a markdown file: settings up top, behavior in
   prose below). The format was already usable by hand; this is scaffolding,
   listing, and viewing them without hand-editing files directly.

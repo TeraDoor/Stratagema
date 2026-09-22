@@ -24,8 +24,8 @@ func main() {
 	switch cmd {
 	case "identity":
 		code = cmdIdentity(rest)
-	case "faculty":
-		code = cmdFaculty(rest)
+	case "profile":
+		code = cmdProfile(rest)
 	case "lock":
 		code = cmdLock(rest)
 	case "interest":
@@ -59,7 +59,7 @@ usage: stratagema <command> [flags]
 
 commands:
   identity   create and list agent identities (create|list)
-  faculty    scaffold, list, and view agent-role definition files (create|list|show)
+  profile    scaffold, list, and view agent-role definition files (create|list|show)
   lock       claim, free, and inspect a named resource lock (acquire|release|status|list)
   interest   subscribe to a resource and read/acknowledge notifications (create|list|pause|resume|inbox|ack)
   strategy   durable strategy ledger: findings/decisions agents log as they work (create|list|show|log|activate|observe|close)

@@ -59,7 +59,7 @@ var validStrategyEventKinds = map[string]bool{
 // might touch over time: what it is, what it's for, and whether it's
 // still open. It doesn't decide anything and doesn't drive anything —
 // see strategy_events for the actual append-only record of what
-// happened; this row is just what a human or a Faculty reads first to
+// happened; this row is just what a human or a Profile reads first to
 // know what a strategy_events log even belongs to.
 type Strategy struct {
 	ID        string
@@ -73,7 +73,7 @@ type Strategy struct {
 
 // StrategyEvent is one append-only entry in a strategy's log — a finding,
 // a decision, a reflection, or a step boundary, written by whichever
-// identity (often a Faculty) was doing the work at the time. Never
+// identity (often a Profile) was doing the work at the time. Never
 // updated or deleted once written; LogStrategyEvent is the only write
 // path and it only ever inserts.
 type StrategyEvent struct {
@@ -355,7 +355,7 @@ type parsedResourceUsage struct {
 // written by the older freeform `strategy log -kind=resource_usage`
 // before this format existed — rather than guessing at a partial parse;
 // callers (strategy usage) are expected to skip-and-report on error, not
-// crash, matching faculty list's handling of an unparseable file.
+// crash, matching profile list's handling of an unparseable file.
 func parseResourceUsageNote(note string) (parsedResourceUsage, error) {
 	var p parsedResourceUsage
 	seen := map[string]bool{}
@@ -464,7 +464,7 @@ func cmdStrategyCreate(args []string) int {
 }
 
 // displayGroup renders a strategy's optional group label the same way
-// faculty list renders its own optional core field: the value if set, "-"
+// profile list renders its own optional core field: the value if set, "-"
 // if not -- one shared convention for "this optional field wasn't given."
 func displayGroup(group string) string {
 	if group == "" {
@@ -665,7 +665,7 @@ func cmdStrategyLogUsage(args []string) int {
 // through the older freeform `strategy log` before log-usage existed — is
 // shown raw and excluded from totals, with a stated reason, rather than
 // crashing or silently dropping it (same "report the problem, don't hide
-// or crash on it" style as faculty list's handling of a bad file).
+// or crash on it" style as profile list's handling of a bad file).
 func cmdStrategyUsage(args []string) int {
 	fs := flag.NewFlagSet("strategy usage", flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)

@@ -196,7 +196,7 @@ func resolveToken(flagVal string) string {
 
 // cmdIdentity deliberately does not special-case "-h"/"--help"/"help" as a
 // pseudo-subcommand -- confirmed intentional-by-precedent, not an oversight:
-// every other subcommand-group dispatcher in this codebase (lock, faculty,
+// every other subcommand-group dispatcher in this codebase (lock, profile,
 // strategy, interest) has the exact same shape, so "-h" here falls through
 // to the same unknown-subcommand error as any other bad subcommand. Actual
 // per-command help is still available two ways: `stratagema identity` alone
@@ -265,7 +265,7 @@ func cmdIdentityCreate(args []string) int {
 }
 
 // displayProtected renders whether an identity requires a token, following
-// the same "value or -" convention faculty list/strategy list already use
+// the same "value or -" convention profile list/strategy list already use
 // for their own optional fields (core, group).
 func displayProtected(p bool) string {
 	if p {

@@ -42,28 +42,28 @@ func captureOutput(t *testing.T, fn func() int) (string, int) {
 	return buf.String(), code
 }
 
-// ── ParseFaculty: real examples ─────────────────────────────────────────
+// ── ParseProfile: real examples ─────────────────────────────────────────
 
-// TestParseFacultyRealExamples parses the two real, hand-written Faculty
+// TestParseProfileRealExamples parses the two real, hand-written Profile
 // files this project's own vocabulary was defined against (copied
 // byte-for-byte into testdata/ from docs/examples/stratagema-proto-strategy-{2,3}
 // in the boat repo, not invented for this test) and asserts the exact
 // fields a hand author actually wrote.
-func TestParseFacultyRealExamples(t *testing.T) {
+func TestParseProfileRealExamples(t *testing.T) {
 	tests := []struct {
 		file string
-		want Faculty
+		want Profile
 	}{
 		{
 			file: "testdata/builder.md",
-			want: Faculty{
+			want: Profile{
 				Name:       "builder",
 				Capability: "go-development",
 				Harness:    "claude-code",
 				Tools:      []string{"read_file", "write_file", "exec"},
 				Body: "Build one real, complete, tested package of a typical Go project against\n" +
 					"a fixed interface contract declared in the Context — not an interface you\n" +
-					"invent, since other Faculties' code depends on it existing exactly as\n" +
+					"invent, since other Profiles' code depends on it existing exactly as\n" +
 					"specified. Airtight means: table-driven tests, every documented error\n" +
 					"path actually tested, `go vet` clean, `go test -race` clean, and edge\n" +
 					"cases resolved and tested, not left ambiguous.\n" +
@@ -71,13 +71,13 @@ func TestParseFacultyRealExamples(t *testing.T) {
 					"Coordinate through Stratagema like any other engineer sharing this\n" +
 					"codebase: claim your area with a lock before writing, using the\n" +
 					"resource-naming convention its own docs recommend (repo-relative path),\n" +
-					"and leave a release note precise enough that a Faculty who never talks to\n" +
+					"and leave a release note precise enough that a Profile who never talks to\n" +
 					"you can build correctly against what you did.",
 			},
 		},
 		{
 			file: "testdata/observer.md",
-			want: Faculty{
+			want: Profile{
 				Name:       "observer",
 				Capability: "verification",
 				Harness:    "claude-code",
@@ -102,9 +102,9 @@ func TestParseFacultyRealExamples(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading %s: %v", tc.file, err)
 			}
-			got, err := ParseFaculty(data)
+			got, err := ParseProfile(data)
 			if err != nil {
-				t.Fatalf("ParseFaculty(%s): %v", tc.file, err)
+				t.Fatalf("ParseProfile(%s): %v", tc.file, err)
 			}
 			if got.Name != tc.want.Name {
 				t.Errorf("Name = %q, want %q", got.Name, tc.want.Name)
@@ -130,20 +130,20 @@ func TestParseFacultyRealExamples(t *testing.T) {
 	}
 }
 
-// ── ParseFaculty: core field, cut S085 ──────────────────────────────────
+// ── ParseProfile: core field, cut S085 ──────────────────────────────────
 
-// TestParseFacultyIgnoresLeftoverCoreLine documents a deliberate reversal,
+// TestParseProfileIgnoresLeftoverCoreLine documents a deliberate reversal,
 // not a regression: the domain-neutral lifecycle-stage `core` field
 // (plan|produce|verify|deliver) was added S077, found to have zero real
 // consumers anywhere in this codebase (write+display only, never read or
 // filtered on by anything — the same profile that got external_signal cut
 // S081), and cut S085. Unlike external_signal (a strategy_event kind,
-// where an unknown kind is a hard parse error), a Faculty frontmatter key
+// where an unknown kind is a hard parse error), a Profile frontmatter key
 // this parser doesn't recognize is silently ignored by design (see
-// ParseFaculty's own `default:` case) — so a hand-authored file with a
+// ParseProfile's own `default:` case) — so a hand-authored file with a
 // leftover "core: produce" line from before this cut must still parse
 // cleanly, just without the field doing anything, not error out.
-func TestParseFacultyIgnoresLeftoverCoreLine(t *testing.T) {
+func TestParseProfileIgnoresLeftoverCoreLine(t *testing.T) {
 	input := "---\n" +
 		"name: builder\n" +
 		"capability: go-development\n" +
@@ -152,19 +152,19 @@ func TestParseFacultyIgnoresLeftoverCoreLine(t *testing.T) {
 		"core: produce\n" +
 		"---\n" +
 		"body\n"
-	got, err := ParseFaculty([]byte(input))
+	got, err := ParseProfile([]byte(input))
 	if err != nil {
-		t.Fatalf("ParseFaculty with a leftover core: line: want it silently ignored, got error: %v", err)
+		t.Fatalf("ParseProfile with a leftover core: line: want it silently ignored, got error: %v", err)
 	}
 	if got.Name != "builder" || got.Body != "body" {
-		t.Fatalf("ParseFaculty with a leftover core: line: rest of the file didn't parse correctly, got %+v", got)
+		t.Fatalf("ParseProfile with a leftover core: line: rest of the file didn't parse correctly, got %+v", got)
 	}
 }
 
-// TestFacultyRenderNeverEmitsCore confirms render() has no code path left
+// TestProfileRenderNeverEmitsCore confirms render() has no code path left
 // that could write a "core:" line — cut cleanly, not just unreachable.
-func TestFacultyRenderNeverEmitsCore(t *testing.T) {
-	f := &Faculty{
+func TestProfileRenderNeverEmitsCore(t *testing.T) {
+	f := &Profile{
 		Name:       "builder",
 		Capability: "go-development",
 		Harness:    "claude-code",
@@ -176,9 +176,9 @@ func TestFacultyRenderNeverEmitsCore(t *testing.T) {
 	}
 }
 
-// ── ParseFaculty: malformed input ───────────────────────────────────────
+// ── ParseProfile: malformed input ───────────────────────────────────────
 
-func TestParseFacultyMalformed(t *testing.T) {
+func TestParseProfileMalformed(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -241,15 +241,15 @@ func TestParseFacultyMalformed(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseFaculty([]byte(tc.input))
+			_, err := ParseProfile([]byte(tc.input))
 			if err == nil {
-				t.Fatalf("ParseFaculty(%q): want error, got nil", tc.name)
+				t.Fatalf("ParseProfile(%q): want error, got nil", tc.name)
 			}
 			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
-				t.Fatalf("ParseFaculty(%q): got error %v, want it to wrap %v", tc.name, err, tc.wantErr)
+				t.Fatalf("ParseProfile(%q): got error %v, want it to wrap %v", tc.name, err, tc.wantErr)
 			}
 			if tc.wantSub != "" && !strings.Contains(err.Error(), tc.wantSub) {
-				t.Fatalf("ParseFaculty(%q): error %q does not contain %q", tc.name, err.Error(), tc.wantSub)
+				t.Fatalf("ParseProfile(%q): error %q does not contain %q", tc.name, err.Error(), tc.wantSub)
 			}
 		})
 	}
@@ -257,12 +257,12 @@ func TestParseFacultyMalformed(t *testing.T) {
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
-func TestFacultyCreateListShow(t *testing.T) {
+func TestProfileCreateListShow(t *testing.T) {
 	dir := t.TempDir()
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyCreate([]string{
-			"-faculties-dir=" + dir,
+		return cmdProfileCreate([]string{
+			"-profiles-dir=" + dir,
 			"-name=builder",
 			"-capability=go-development",
 			"-harness=claude-code",
@@ -270,61 +270,61 @@ func TestFacultyCreateListShow(t *testing.T) {
 		})
 	})
 	if code != 0 {
-		t.Fatalf("faculty create: exit %d, output:\n%s", code, out)
+		t.Fatalf("profile create: exit %d, output:\n%s", code, out)
 	}
 	if !strings.Contains(out, "created") || !strings.Contains(out, "builder.md") {
-		t.Fatalf("faculty create: unexpected output:\n%s", out)
+		t.Fatalf("profile create: unexpected output:\n%s", out)
 	}
 
 	out, code = captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	if code != 0 {
-		t.Fatalf("faculty list: exit %d, output:\n%s", code, out)
+		t.Fatalf("profile list: exit %d, output:\n%s", code, out)
 	}
 	if !strings.Contains(out, "builder") || !strings.Contains(out, "go-development") || !strings.Contains(out, "claude-code") {
-		t.Fatalf("faculty list: want builder/go-development/claude-code in output, got:\n%s", out)
+		t.Fatalf("profile list: want builder/go-development/claude-code in output, got:\n%s", out)
 	}
 
 	out, code = captureOutput(t, func() int {
-		return cmdFacultyShow([]string{"-faculties-dir=" + dir, "builder"})
+		return cmdProfileShow([]string{"-profiles-dir=" + dir, "builder"})
 	})
 	if code != 0 {
-		t.Fatalf("faculty show: exit %d, output:\n%s", code, out)
+		t.Fatalf("profile show: exit %d, output:\n%s", code, out)
 	}
 	for _, want := range []string{"name:       builder", "capability: go-development", "harness:    claude-code", "read_file, write_file, exec"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("faculty show: want %q in output, got:\n%s", want, out)
+			t.Fatalf("profile show: want %q in output, got:\n%s", want, out)
 		}
 	}
 }
 
-// TestFacultyCreateRejectsCoreFlag confirms -core is no longer a
-// recognized flag on `faculty create` at all (cut S085, not just left
+// TestProfileCreateRejectsCoreFlag confirms -core is no longer a
+// recognized flag on `profile create` at all (cut S085, not just left
 // optional) — flag.ExitOnError means passing an unknown flag exits the
 // process directly, so this is checked via a real subprocess rather than
-// calling cmdFacultyCreate in-process (which would kill the test binary).
-func TestFacultyCreateRejectsCoreFlag(t *testing.T) {
+// calling cmdProfileCreate in-process (which would kill the test binary).
+func TestProfileCreateRejectsCoreFlag(t *testing.T) {
 	bin := buildBinary(t)
 	dir := t.TempDir()
-	cmd := exec.Command(bin, "faculty", "create",
-		"-faculties-dir="+dir, "-name=leader", "-capability=orchestration",
+	cmd := exec.Command(bin, "profile", "create",
+		"-profiles-dir="+dir, "-name=leader", "-capability=orchestration",
 		"-harness=claude-code", "-tools=read_file", "-core=plan")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("faculty create -core=plan: want a real error (flag no longer exists), got exit 0:\n%s", out)
+		t.Fatalf("profile create -core=plan: want a real error (flag no longer exists), got exit 0:\n%s", out)
 	}
 	if !strings.Contains(string(out), "flag provided but not defined") {
-		t.Fatalf("faculty create -core=plan: want an unknown-flag error, got:\n%s", out)
+		t.Fatalf("profile create -core=plan: want an unknown-flag error, got:\n%s", out)
 	}
 }
 
-func TestFacultyCreateRefusesOverwrite(t *testing.T) {
+func TestProfileCreateRefusesOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	create := func() (string, int) {
 		return captureOutput(t, func() int {
-			return cmdFacultyCreate([]string{
-				"-faculties-dir=" + dir,
+			return cmdProfileCreate([]string{
+				"-profiles-dir=" + dir,
 				"-name=builder",
 				"-capability=go-development",
 				"-harness=claude-code",
@@ -359,18 +359,18 @@ func TestFacultyCreateRefusesOverwrite(t *testing.T) {
 	}
 }
 
-// TestFacultyListIncludesHandwrittenFile is the automated counterpart of
+// TestProfileListIncludesHandwrittenFile is the automated counterpart of
 // this project's own MANUAL_TEST.md pending item: a directory containing
-// one Faculty created via the CLI and one authored entirely by hand (the
+// one Profile created via the CLI and one authored entirely by hand (the
 // real observer.md fixture, not something this test invents) must list
-// both correctly — hand-authored Faculties are the expected common case,
+// both correctly — hand-authored Profiles are the expected common case,
 // not an edge case.
-func TestFacultyListIncludesHandwrittenFile(t *testing.T) {
+func TestProfileListIncludesHandwrittenFile(t *testing.T) {
 	dir := t.TempDir()
 
 	_, code := captureOutput(t, func() int {
-		return cmdFacultyCreate([]string{
-			"-faculties-dir=" + dir,
+		return cmdProfileCreate([]string{
+			"-profiles-dir=" + dir,
 			"-name=builder",
 			"-capability=go-development",
 			"-harness=claude-code",
@@ -378,7 +378,7 @@ func TestFacultyListIncludesHandwrittenFile(t *testing.T) {
 		})
 	})
 	if code != 0 {
-		t.Fatalf("faculty create: want success")
+		t.Fatalf("profile create: want success")
 	}
 
 	handwritten, err := os.ReadFile("testdata/observer.md")
@@ -390,38 +390,38 @@ func TestFacultyListIncludesHandwrittenFile(t *testing.T) {
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	if code != 0 {
-		t.Fatalf("faculty list: exit %d, output:\n%s", code, out)
+		t.Fatalf("profile list: exit %d, output:\n%s", code, out)
 	}
 	if !strings.Contains(out, "builder") {
-		t.Fatalf("faculty list: missing CLI-created builder, got:\n%s", out)
+		t.Fatalf("profile list: missing CLI-created builder, got:\n%s", out)
 	}
 	if !strings.Contains(out, "observer") || !strings.Contains(out, "verification") {
-		t.Fatalf("faculty list: missing hand-authored observer, got:\n%s", out)
+		t.Fatalf("profile list: missing hand-authored observer, got:\n%s", out)
 	}
 
 	out, code = captureOutput(t, func() int {
-		return cmdFacultyShow([]string{"-faculties-dir=" + dir, "observer"})
+		return cmdProfileShow([]string{"-profiles-dir=" + dir, "observer"})
 	})
 	if code != 0 {
-		t.Fatalf("faculty show observer: exit %d, output:\n%s", code, out)
+		t.Fatalf("profile show observer: exit %d, output:\n%s", code, out)
 	}
 	if !strings.Contains(out, "query_db") {
-		t.Fatalf("faculty show observer: want its real tools in output, got:\n%s", out)
+		t.Fatalf("profile show observer: want its real tools in output, got:\n%s", out)
 	}
 }
 
-// TestFacultyListReportsUnparseableFileWithoutHidingOthers confirms a
+// TestProfileListReportsUnparseableFileWithoutHidingOthers confirms a
 // broken hand-edited file is reported clearly by name, and does not take
-// down the whole listing or hide a sibling faculty that's fine.
-func TestFacultyListReportsUnparseableFileWithoutHidingOthers(t *testing.T) {
+// down the whole listing or hide a sibling profile that's fine.
+func TestProfileListReportsUnparseableFileWithoutHidingOthers(t *testing.T) {
 	dir := t.TempDir()
 
 	_, code := captureOutput(t, func() int {
-		return cmdFacultyCreate([]string{
-			"-faculties-dir=" + dir,
+		return cmdProfileCreate([]string{
+			"-profiles-dir=" + dir,
 			"-name=builder",
 			"-capability=go-development",
 			"-harness=claude-code",
@@ -429,40 +429,40 @@ func TestFacultyListReportsUnparseableFileWithoutHidingOthers(t *testing.T) {
 		})
 	})
 	if code != 0 {
-		t.Fatalf("faculty create: want success")
+		t.Fatalf("profile create: want success")
 	}
 
 	broken := filepath.Join(dir, "broken.md")
-	if err := os.WriteFile(broken, []byte("not a faculty file at all\n"), 0o644); err != nil {
+	if err := os.WriteFile(broken, []byte("not a profile file at all\n"), 0o644); err != nil {
 		t.Fatalf("writing broken.md: %v", err)
 	}
 
 	out, code := captureOutput(t, func() int {
-		return cmdFacultyList([]string{"-faculties-dir=" + dir})
+		return cmdProfileList([]string{"-profiles-dir=" + dir})
 	})
 	if code == 0 {
-		t.Fatalf("faculty list: want non-zero exit when a file fails to parse")
+		t.Fatalf("profile list: want non-zero exit when a file fails to parse")
 	}
 	if !strings.Contains(out, "broken.md") {
-		t.Fatalf("faculty list: want the broken file named in output, got:\n%s", out)
+		t.Fatalf("profile list: want the broken file named in output, got:\n%s", out)
 	}
 	if !strings.Contains(out, "builder") {
-		t.Fatalf("faculty list: a broken file should not hide a valid sibling, got:\n%s", out)
+		t.Fatalf("profile list: a broken file should not hide a valid sibling, got:\n%s", out)
 	}
 }
 
-func TestFacultyDirResolutionMirrorsDBPath(t *testing.T) {
-	t.Setenv("STRATAGEMA_FACULTIES", "")
-	if got, want := resolveFacultiesDir(""), filepath.Join(".stratagema", "faculties"); got != want {
-		t.Fatalf("resolveFacultiesDir(\"\") with no env = %q, want %q", got, want)
+func TestProfileDirResolutionMirrorsDBPath(t *testing.T) {
+	t.Setenv("STRATAGEMA_PROFILES", "")
+	if got, want := resolveProfilesDir(""), filepath.Join(".stratagema", "profiles"); got != want {
+		t.Fatalf("resolveProfilesDir(\"\") with no env = %q, want %q", got, want)
 	}
 
-	t.Setenv("STRATAGEMA_FACULTIES", "/tmp/custom-faculties")
-	if got, want := resolveFacultiesDir(""), "/tmp/custom-faculties"; got != want {
-		t.Fatalf("resolveFacultiesDir(\"\") with env set = %q, want %q", got, want)
+	t.Setenv("STRATAGEMA_PROFILES", "/tmp/custom-profiles")
+	if got, want := resolveProfilesDir(""), "/tmp/custom-profiles"; got != want {
+		t.Fatalf("resolveProfilesDir(\"\") with env set = %q, want %q", got, want)
 	}
 
-	if got, want := resolveFacultiesDir("/explicit/flag/dir"), "/explicit/flag/dir"; got != want {
-		t.Fatalf("resolveFacultiesDir(explicit) = %q, want %q (flag should win over env)", got, want)
+	if got, want := resolveProfilesDir("/explicit/flag/dir"), "/explicit/flag/dir"; got != want {
+		t.Fatalf("resolveProfilesDir(explicit) = %q, want %q (flag should win over env)", got, want)
 	}
 }
