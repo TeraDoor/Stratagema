@@ -306,7 +306,7 @@ func cmdProfileCreate(args []string) int {
 		return die(1, "profile create: %v", err)
 	}
 
-	fmt.Printf("created %s\n  capability: %s\n  harness:    %s\n  tools:      %s\n", path, f.Capability, f.Harness, strings.Join(f.Tools, ", "))
+	fmt.Printf("created %s\n  capability: %s\n  harness:    %s\n  tools:      %s\n\n  its body is a placeholder -- open %s and replace it with\n  %s's actual behavior before dispatching this Profile.\n", path, f.Capability, f.Harness, strings.Join(f.Tools, ", "), path, f.Name)
 	return 0
 }
 
