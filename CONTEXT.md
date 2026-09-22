@@ -106,17 +106,20 @@ Four real commits, on top of `6a6e52c`, now on `origin/main`:
    body is a placeholder and where to edit it, instead of only saying so
    inside the file itself
 
-**A real, durable Strategy record of this work exists, but it's local,
-not in git**: `~/stratagema/.stratagema/events.db` is gitignored by
-design (runtime state, not source). It holds this project's actual
-dogfood history — a real Sep-16 lock-coordination episode wiring
-`strategy`/`faculty` into `main.go`'s dispatch, and this session's
-`self-hosting-roadmap` strategy group (the roadmap itself, plus the two
-strategies above closed with real reflections). **A fresh clone will not
-see any of this** — `strategy list`/`strategy show` against that file
-only works on the machine that has it. If you're an agent picking this
-up on a different machine, this file's content is your substitute for
-that record.
+**A real, durable Strategy record of this work exists locally, not in
+this git history**: `~/stratagema/.stratagema/events.db` is gitignored
+by design (runtime state, not source), and `strategy list`/`show`
+against it only works on the machine that has it. It holds this
+project's actual dogfood history — the real Sep-16 lock-coordination
+episode wiring `strategy`/`faculty` into `main.go`'s dispatch, and this
+session's `self-hosting-roadmap` strategy group.
+
+**A frozen 2026-09-22 snapshot of that history is committed and
+public**, in `~/boat/docs/examples/stratagema-dogfood-history/` — a
+`reflection.md` narrative, `raw-events.md` (every row, verbatim, not
+summarized), and the raw `events.db.snapshot-2026-09-22` file itself.
+If you're an agent on a different machine, that's your substitute for
+the live local file — current as of the date in its filename, not live.
 
 **Open roadmap, logged in `self-hosting-roadmap`, not yet built**:
 harness-enforced lock (still advisory-only), real per-invocation
