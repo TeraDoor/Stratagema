@@ -400,15 +400,18 @@ CREATE INDEX IF NOT EXISTS idx_strategy_events_strategy ON strategy_events(strat
 `
 
 // TestSchemaMismatchNewBinaryAgainstOldSchema is empirical fact-finding
-// for the "old database, new binary" direction. Finding, confirmed by
-// hand first with a real binary built from commit 222cf89: today's
-// migrate() is CREATE TABLE IF NOT EXISTS only -- it never ALTERs an
-// existing table -- so opening a legacy-schema file with today's code
-// leaves the new columns permanently missing, and every current INSERT/
-// SELECT in this codebase unconditionally names them. Net effect: this
-// direction fails LOUD, immediately, and every time -- a clear Go error
-// surfaces on essentially the first read or write, never silent
-// corruption or a partial write.
+// for the "old database, new binary" direction, rewritten after
+// addEvolvedColumns (store.go) closed the gap this test originally
+// documented. Original finding, still true of the code at commit
+// 222cf89, no longer true of today's: migrate() was CREATE TABLE IF NOT
+// EXISTS only -- it never ALTERed an existing table -- so opening a
+// legacy-schema file left the new columns permanently missing and every
+// read/write naming them failed loudly. That direction now succeeds
+// instead: migrate() adds exactly the columns a legacy table is missing,
+// confirmed here against real legacy-shaped tables and a real
+// pre-existing row -- the same class of test as
+// store_migration_test.go's, kept here too since this file is the
+// project's dedicated home for schema-mismatch fact-finding.
 func TestSchemaMismatchNewBinaryAgainstOldSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	raw, err := sql.Open("sqlite", dbPath+"?_busy_timeout=10000&_journal_mode=WAL")
@@ -430,60 +433,57 @@ func TestSchemaMismatchNewBinaryAgainstOldSchema(t *testing.T) {
 		t.Fatalf("closing raw legacy db: %v", err)
 	}
 
-	// Today's real openStore/migrate() against that file: migrate()
-	// itself must not fail (CREATE TABLE IF NOT EXISTS is a true no-op on
-	// tables that already exist -- confirmed, not assumed).
 	s, err := openStore(dbPath)
 	if err != nil {
-		t.Fatalf("today's openStore against a legacy-schema db: want a clean open (migrate() should no-op on existing tables), got: %v", err)
+		t.Fatalf("today's openStore against a legacy-schema db: want a clean open, got: %v", err)
 	}
 	defer s.Close()
 
-	// Reads against the legacy locks table fail loudly -- scanLock always
-	// selects strategy_id/lease_seconds/renewed_at, which don't exist.
-	if _, err := s.ListLocks(); err == nil {
-		t.Fatalf("want ListLocks against a legacy locks table to fail cleanly (it selects columns that don't exist there), got no error")
-	} else if !isSchemaMismatchSQLError(err) {
-		t.Fatalf("want a clear schema-mismatch SQL error, got: %v", err)
+	// Reads against the migrated legacy locks table now succeed, and the
+	// pre-existing row survived with the evolved columns reading back as
+	// their documented "nothing set yet" values.
+	locks, err := s.ListLocks()
+	if err != nil {
+		t.Fatalf("ListLocks against a migrated legacy locks table: want success, got: %v", err)
+	}
+	found := false
+	for _, l := range locks {
+		if l.Resource == "legacy-res" {
+			found = true
+			if l.StrategyID != "" {
+				t.Fatalf("a legacy lock's strategy_id must read back empty, got %q", l.StrategyID)
+			}
+			if l.LeaseSeconds != 0 || l.RenewedAt != nil {
+				t.Fatalf("a legacy lock must read back with no lease, got LeaseSeconds=%d RenewedAt=%v", l.LeaseSeconds, l.RenewedAt)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("pre-existing legacy lock was lost by the migration")
 	}
 
-	// Writes fail loudly too -- CreateIdentity's INSERT always names
-	// token_hash, which doesn't exist in the legacy identities table.
-	if _, err := s.CreateIdentity("new-binary-agent"); err == nil {
-		t.Fatalf("want CreateIdentity against a legacy identities table to fail cleanly (no token_hash column there), got no error")
-	} else if !isSchemaMismatchSQLError(err) {
-		t.Fatalf("want a clear schema-mismatch SQL error, got: %v", err)
+	// Writes succeed too -- CreateIdentity's INSERT names token_hash,
+	// which now exists on the migrated table.
+	fresh, err := s.CreateIdentity("new-binary-agent")
+	if err != nil {
+		t.Fatalf("CreateIdentity against a migrated legacy identities table: want success, got: %v", err)
+	}
+	if fresh.Protected {
+		t.Fatalf("a plain CreateIdentity must still read back unprotected after migration")
 	}
 
-	// AcquireLock (the Store method itself -- VerifyIdentityToken is a
-	// separate call the CLI/HTTP layer makes first, not part of this
-	// method) fails at its own INSERT, which always names strategy_id/
-	// lease_seconds/renewed_at.
-	if _, err := s.AcquireLock("legacy-res-2", "brand-new-identity", "", "", 0); err == nil {
-		t.Fatalf("want AcquireLock against a legacy-schema db to fail cleanly, got no error")
-	} else if !isSchemaMismatchSQLError(err) {
-		t.Fatalf("want a clear schema-mismatch SQL error, got: %v", err)
+	// AcquireLock (the Store method itself) succeeds against the migrated
+	// legacy locks table.
+	if _, err := s.AcquireLock("legacy-res-2", fresh.ID, "", "", 0); err != nil {
+		t.Fatalf("AcquireLock against a migrated legacy-schema db: want success, got: %v", err)
 	}
 
-	// And the CLI's own extra pre-check (VerifyIdentityToken, run before
-	// AcquireLock by cmdLockAcquire) fails the exact same loud way, one
-	// step earlier, because it SELECTs token_hash.
-	if err := s.VerifyIdentityToken("brand-new-identity", ""); err == nil {
-		t.Fatalf("want VerifyIdentityToken against a legacy identities table to fail cleanly (no token_hash column there), got no error")
-	} else if !isSchemaMismatchSQLError(err) {
-		t.Fatalf("want a clear schema-mismatch SQL error, got: %v", err)
+	// VerifyIdentityToken succeeds too, for the legacy-created identity
+	// that never had a token_hash column to be protected by in the first
+	// place -- unprotected before the migration, unprotected after it.
+	if err := s.VerifyIdentityToken("ident-legacy", ""); err != nil {
+		t.Fatalf("VerifyIdentityToken against a migrated legacy identities table: want success (unprotected), got: %v", err)
 	}
-}
-
-// isSchemaMismatchSQLError matches either phrasing SQLite/modernc.org's
-// driver uses for "this column doesn't exist here" -- "no such column: x"
-// from a SELECT, "table t has no column named x" from an INSERT naming an
-// unknown column. Both are the same underlying fact (today's code and
-// this file's schema disagree), just worded differently depending on
-// which kind of statement hit it.
-func isSchemaMismatchSQLError(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "no such column") || strings.Contains(msg, "has no column named")
 }
 
 // TestSchemaMismatchOldCodeIgnoresLeaseReclaimOnNewSchema is empirical
