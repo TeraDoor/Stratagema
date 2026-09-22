@@ -1,5 +1,9 @@
 # Project instructions (Stratagema)
 
+**Picking this project back up, or new to it?** Read `CONTEXT.md` first
+— a verified, tiered guide to which of this repo's 21+ branches actually
+need reading for a given task, and which are safe to skip.
+
 ## Manual-test gate — MANDATORY, no exceptions
 
 `MANUAL_TEST.md` (root) is a local, git-hook-enforced push gate — read it
