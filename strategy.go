@@ -416,9 +416,9 @@ func cmdStrategy(args []string) int {
 	case "usage":
 		return cmdStrategyUsage(rest)
 	case "activate":
-		return cmdStrategySetStatus(rest, StrategyActive)
+		return cmdStrategySetStatus(rest, "activate", StrategyActive)
 	case "observe":
-		return cmdStrategySetStatus(rest, StrategyObserving)
+		return cmdStrategySetStatus(rest, "observe", StrategyObserving)
 	case "close":
 		return cmdStrategyClose(rest)
 	case "next":
@@ -742,25 +742,29 @@ func cmdStrategyUsage(args []string) int {
 }
 
 // cmdStrategySetStatus reuses one function for both activate and
-// observe, parameterized by target status — the same pattern
-// cmdInterestSetStatus already uses for pause/resume.
-func cmdStrategySetStatus(args []string, status string) int {
-	fs := flag.NewFlagSet("strategy "+status, flag.ExitOnError)
+// observe, parameterized by the actual subcommand verb (for the flag
+// set's own name and user-facing messages) and the target status (for
+// the actual write and the result line) — kept separate since they
+// diverge for every verb here (activate -> active, observe ->
+// observing), the same pattern cmdInterestSetStatus already uses for
+// pause/resume.
+func cmdStrategySetStatus(args []string, verb, status string) int {
+	fs := flag.NewFlagSet("strategy "+verb, flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
 	fs.Parse(args)
 
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return die(1, "strategy %s: strategy id required", status)
+		return die(1, "strategy %s: strategy id required", verb)
 	}
 	store, err := openStore(*dbFlag)
 	if err != nil {
-		return die(1, "strategy %s: %v", status, err)
+		return die(1, "strategy %s: %v", verb, err)
 	}
 	defer store.Close()
 
 	if err := store.SetStrategyStatus(rest[0], status); err != nil {
-		return die(1, "strategy %s: %v", status, err)
+		return die(1, "strategy %s: %v", verb, err)
 	}
 	fmt.Printf("%s: %s\n", rest[0], status)
 	return 0

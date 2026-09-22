@@ -313,9 +313,9 @@ func cmdInterest(args []string) int {
 	case "list":
 		return cmdInterestList(rest)
 	case "pause":
-		return cmdInterestSetStatus(rest, InterestPaused)
+		return cmdInterestSetStatus(rest, "pause", InterestPaused)
 	case "resume":
-		return cmdInterestSetStatus(rest, InterestActive)
+		return cmdInterestSetStatus(rest, "resume", InterestActive)
 	case "inbox":
 		return cmdInterestInbox(rest)
 	case "ack":
@@ -380,23 +380,27 @@ func cmdInterestList(args []string) int {
 	return 0
 }
 
-func cmdInterestSetStatus(args []string, status string) int {
-	fs := flag.NewFlagSet("interest "+status, flag.ExitOnError)
+// cmdInterestSetStatus takes both the actual subcommand verb (for the
+// flag set's own name and user-facing messages) and the target status
+// (for the actual write and the result line) — kept separate since they
+// diverge for resume -> active.
+func cmdInterestSetStatus(args []string, verb, status string) int {
+	fs := flag.NewFlagSet("interest "+verb, flag.ExitOnError)
 	dbFlag := dbPathFlag(fs)
 	fs.Parse(args)
 
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return die(1, "interest %s: interest id required", status)
+		return die(1, "interest %s: interest id required", verb)
 	}
 	store, err := openStore(*dbFlag)
 	if err != nil {
-		return die(1, "interest %s: %v", status, err)
+		return die(1, "interest %s: %v", verb, err)
 	}
 	defer store.Close()
 
 	if err := store.SetInterestStatus(rest[0], status); err != nil {
-		return die(1, "interest %s: %v", status, err)
+		return die(1, "interest %s: %v", verb, err)
 	}
 	fmt.Printf("%s: %s\n", rest[0], status)
 	return 0
