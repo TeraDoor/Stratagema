@@ -55,7 +55,7 @@ func TestUnprotectedIdentityAuthBehaviorIsUnchanged(t *testing.T) {
 	}
 
 	// ListIdentities must display "-" for the protected column, same
-	// convention profile list/strategy list already use.
+	// convention tactic list/strategy list already use.
 	all, err := s.ListIdentities()
 	if err != nil {
 		t.Fatalf("ListIdentities: %v", err)

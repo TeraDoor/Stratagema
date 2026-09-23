@@ -34,7 +34,7 @@ git show 6a6e52c
 stratagema-runner." `main` is not the full feature set — it's a
 deliberate subtraction from a fully-tested superset (`dev`), keeping
 Identity + Lock (leases, strategy-linkage) + Interest/Propagation +
-Strategy + Profile (renamed from Faculty this session), explicitly
+Strategy + Tactic (renamed from Faculty this session), explicitly
 excluding remote coordination, the network access gate/TLS, and the
 runner. Knowing this one commit exists is the difference between
 "rebuilding a feature that was deliberately cut for now" and "extending
@@ -50,14 +50,14 @@ checkout needed for most of them.
 | Capability | Built in | Hardened in |
 |---|---|---|
 | Lock + Interest/Propagation (the original core) | `817f866` (base commit, predates the branch wave) | `test-lock-lease`, `test-strategy-interest` |
-| Strategy + Faculty/Profile (base) | `5244347` (base commit) | `test-faculty` (real path-traversal bug), `test-strategy-interest` |
+| Strategy + Faculty/Tactic (base) | `5244347` (base commit) | `test-faculty` (real path-traversal bug), `test-strategy-interest` |
 | Opt-in lease/expiry on locks | `feat-lock-lease` | `test-lock-lease` (extreme-lease overflow, negative-lease bypass, both fixed) |
 | Locks linked to strategies (`strategy_id`) | `feat-locks-strategies` | `test-lock-lease` |
 | Strategy grouping (`group_name`) | `feat-strategy-grouping` | `test-strategy-interest` |
 | Per-harness resource_usage logging | `feat-token-reporting` | — (still hand-typed; see Tier 5's roadmap note) |
 | Opt-in identity token auth (`-protect`) | `feat-identity-auth` | `test-identity-cli` (silent trailing-flag drop, newline display, both fixed) |
 | Durability / schema-mismatch characterization | — | `test-durability` (named the gap; **closed for real this session**, see Tier 5) |
-| Faculty → Profile rename | this session | — |
+| Faculty → Tactic rename | this session | — |
 
 ## Tier 3 — built, but deliberately not in `main` (read only if your task needs it)
 
@@ -83,17 +83,17 @@ the fully-merged superset (231 tests as of `test-durability`'s merge,
   unresolved — see Tier 5's roadmap.
 - `cut-faculty-core` — a speculative lifecycle-stage field on Faculty
   (`core: plan|produce|verify|deliver`) was added, found to have zero
-  real consumers, and cut. `ParseProfile` still silently ignores a
-  leftover `core:` line by design (see `profile_test.go`'s
-  `TestParseProfileIgnoresLeftoverCoreLine`) — don't reintroduce the
+  real consumers, and cut. `ParseTactic` still silently ignores a
+  leftover `core:` line by design (see `tactic_test.go`'s
+  `TestParseTacticIgnoresLeftoverCoreLine`) — don't reintroduce the
   field without a real consumer already needing it.
 
 ## Tier 5 — this session's additions (2026-09-22)
 
 Four real commits, on top of `6a6e52c`, now on `origin/main`:
 
-1. `7eab483` — Faculty → Profile rename (naming register reversal;
-   `faculty.go`→`profile.go`, CLI verb, env var, directory, all of it)
+1. `7eab483` — Faculty → Tactic rename (naming register reversal;
+   `faculty.go`→`tactic.go`, CLI verb, env var, directory, all of it)
 2. `d0a7a34` — fixed a usage-string bug: `strategy activate -h`/
    `interest pause -h`/`interest resume -h` printed the wrong subcommand
    name (built from the target *status*, not the verb typed)
@@ -102,7 +102,7 @@ Four real commits, on top of `6a6e52c`, now on `origin/main`:
    already-existing older-shaped table. Added `addEvolvedColumns`, still
    no version table/migration framework, same design philosophy the
    original comment argued for, just made to actually hold
-4. `99da61a` — `profile create` now tells you at creation time that its
+4. `99da61a` — `tactic create` now tells you at creation time that its
    body is a placeholder and where to edit it, instead of only saying so
    inside the file itself
 
@@ -139,9 +139,9 @@ and `~/boat/LEDGER.md` + `~/boat/ledger/`. Most relevant if you need the
 - `stratagema-naming-and-references.md` — naming register, including the
   2026-09-22 reversal (military/defense-tech register now preferred over
   the earlier mind/consciousness one) that produced this session's
-  Faculty → Profile rename
+  Faculty → Tactic rename
 - `stratagema-classical-computing-analogies.md` — works out that System 2
-  (the cross-strategy Leader Faculty/Profile) is the actual
+  (the cross-strategy Leader Faculty/Tactic) is the actual
   reconciliation-loop shape, hand-run by a human today, not an automated
   one
 - `stratagema-comparison-benchmark-design.md` + `docs/examples/

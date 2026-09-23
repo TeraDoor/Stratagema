@@ -19,7 +19,7 @@ func TestCreateGetListStrategy(t *testing.T) {
 		name   string
 		thesis string
 	}{
-		{"profile-file-rollout", "Profile files reduce coordination overhead vs. ad hoc prompts"},
+		{"tactic-file-rollout", "Tactic files reduce coordination overhead vs. ad hoc prompts"},
 		{"lock-contention-probe", "Two real agents on the same file will actually contend, not just in theory"},
 	}
 

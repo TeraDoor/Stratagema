@@ -48,7 +48,7 @@ func TestStrategyLogTwiceThenShowPrintsInOrder(t *testing.T) {
 		}
 	}
 
-	idCode, idOut := run("identity", "create", "-label=profile-1")
+	idCode, idOut := run("identity", "create", "-label=tactic-1")
 	identity := extractID(t, idCode, idOut)
 
 	createCode, createOut := run("strategy", "create", "-name=probe", "-thesis=does the CLI log events in order")
@@ -248,7 +248,7 @@ func TestStrategyLogUsageAndUsageRoundTrip(t *testing.T) {
 		}
 	}
 
-	idCode, idOut := run("identity", "create", "-label=profile-1")
+	idCode, idOut := run("identity", "create", "-label=tactic-1")
 	identity := extractID(t, idCode, idOut)
 
 	createCode, createOut := run("strategy", "create", "-name=usage-probe", "-thesis=structured usage logs stay comparable across harnesses")
@@ -323,7 +323,7 @@ func TestStrategyNextRecapsRecentEventsAndSystemWideLocks(t *testing.T) {
 		}
 	}
 
-	idCode, idOut := run("identity", "create", "-label=profile-resuming-work")
+	idCode, idOut := run("identity", "create", "-label=tactic-resuming-work")
 	identity := extractID(t, idCode, idOut)
 
 	createCode, createOut := run("strategy", "create", "-name=recap-probe", "-thesis=resuming agents get an accurate, non-deciding recap")
