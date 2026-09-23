@@ -1,5 +1,12 @@
-# local event store
-.stratagema/
+# local event store -- but Tactics are hand-authored, shareable role
+# files, not runtime state, so they're carved back out below. Ignoring
+# the directory's *contents* via a glob, not the directory itself --
+# git never descends into a wholesale-ignored directory, so a deeper
+# negation for one subfolder silently has no effect if the parent is
+# excluded outright (confirmed directly: system-2.md stayed ignored
+# under the naive `.stratagema/` + `!.stratagema/tactics/` version).
+.stratagema/*
+!.stratagema/tactics/
 *.db
 
 # build artifacts
